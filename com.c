@@ -1,5 +1,6 @@
 #include "arduino-serial-lib.h"
 #include "HALResource.h"
+#include "HALMsg.h"
 #include "utils.h"
 #include <unistd.h>
 #include <stdio.h>
@@ -9,81 +10,84 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <errno.h>
+
+#define HAL_LOCK(r) pthread_mutex_lock(&((r)->hal->mutex))
+#define HAL_UNLOCK(r) pthread_mutex_unlock(&((r)->hal->mutex))
+
+#define HAL_SIGNAL(r) pthread_cond_signal(&(r)->cond)
+#define HAL_WAIT(r) pthread_cond_timedwait(&((r)->cond), &((r)->hal->mutex), &HAL_req_timeout)
+
+static const struct timespec HAL_req_timeout = {.tv_sec=0, .tv_nsec=500000000};
+
+static void HAL_send_msg(struct HAL_t *hal, HALMsg *msg);
+static bool HAL_read_msg(struct HAL_t *hal, HALMsg *res);
+static bool HAL_sync_read(
+    struct HAL_t *hal,
+    HALCommand cmd,
+    HALMsg *res,
+    size_t retry
+);
+
 
 /* Establish communication with arduino && initialize HAL structure */
 bool HAL_init(struct HAL_t *hal, const char *arduino_dev)
 {
-    char buf[128];
-    char *line;
-    char type;
-    long int n_items;
-    int n_try;
-    HALResource *resptr = NULL;
-
     memset(hal, 0, sizeof(struct HAL_t));
     hal->serial_fd = serialport_init(arduino_dev, 115200);
     if (hal->serial_fd < 0)
         return false;
 
-    /* Get HAL version */
-    for (int k=0; k<5; k++){
-        serialport_writebyte(hal->serial_fd, '?');
-        n_try = 0;
-        do {
-            serialport_read_until(hal->serial_fd, buf, '\n', 128, 50);
-            line = strip(buf);
-            n_try++;
-        } while (line[0] != '?' && n_try <= 20);
-        if (line[0] == '?') break;
-    }
-    if (line[0] != '?')
+    sleep(1);
+
+    HALMsg msg = {.cmd=VERSION};
+    HAL_send_msg(hal, &msg);
+    if (! HAL_sync_read(hal, VERSION, &msg, 512))
         goto fail;
 
-    strncpy(hal->version, line+1, 40);
-    hal->version[40] = '\0';
-
-    /* Get HAL structure (Resources) */
-    serialport_writebyte(hal->serial_fd, '$');
+    /* Get HAL structure */
+    msg.cmd = TREE;
+    HAL_send_msg(hal, &msg);
+    if (! HAL_sync_read(hal, VERSION, &msg, 512))
+        goto fail;
+    
+    /* For the 4 resources type */
     for (int i=0; i<4; i++){
-        serialport_read_until(hal->serial_fd, buf, '\n', 128, 1000);
-        line = strip(buf);
-        if (line[0] != '$')
+        if (! HAL_sync_read(hal, TREE, &msg, 512))
             goto fail;
 
-        type = line[1];
-        n_items = strtol(line+2, NULL, 10);
+        /* Allocate N items */
+        unsigned char N = msg.rid;
+        HALCommand res_type = msg.data[0];
+        HALResource *res = calloc(N, sizeof(HALResource));
+        if (! res)
+            goto fail;
 
-        switch (type){
-            case 'T':
-                hal->triggers = calloc(n_items, sizeof(HALResource));
-                hal->n_triggers = n_items;
-                resptr = hal->triggers;
-                break;
-            case 'C':
-                hal->sensors = calloc(n_items, sizeof(HALResource));
-                hal->n_sensors = n_items;
-                resptr = hal->sensors;
-                break;
-            case 'S':
-                hal->switchs = calloc(n_items, sizeof(HALResource));
-                hal->n_switchs = n_items;
-                resptr = hal->switchs;
-                break;
-            case 'A':
-                hal->animations = calloc(n_items, sizeof(HALResource));
-                hal->n_animations = n_items;
-                resptr = hal->animations;
-                break;
-            default:
-                goto fail;
+        /* Assign in hal */
+        if (res_type == ANIMATION_FRAMES){
+            hal->animations = res;
+            hal->n_animations = N;
+        }
+        else if (res_type == SENSOR){
+            hal->sensors = res;
+            hal->n_sensors = N;
+        }
+        else if (res_type == TRIGGER){
+            hal->triggers = res;
+            hal->n_triggers = N;
+        }
+        else{
+            hal->switchs = res;
+            hal->n_switchs = N;
         }
 
-        for (int i=0; i<n_items; i++){
-            serialport_read_until(hal->serial_fd, buf, '\n', 128, 1000);
-            line = strip(buf);
-            if (line[0] != '$')
+
+        /* Get list of items */
+        for (unsigned char j=0; j<N; j++){
+            if (! HAL_read_msg(hal, &msg))
                 goto fail;
-            HALResource_init(resptr+i, line+1, type, i, hal);
+            msg.data[msg.len] = '\0';
+            HALResource_init(res+j, (const char *) msg.data+1, res_type, msg.rid, hal);
         }
     }
 
@@ -120,7 +124,7 @@ void HAL_socket_open(struct HAL_t *hal, const char *path)
 }
 
 /* Writes msg to every clients of HAL events socket */
-void HAL_socket_write(struct HAL_t *hal, const char *msg)
+static void HAL_socket_write(struct HAL_t *hal, const char *msg)
 {
     int len = (int) strlen(msg);
     for (int i=0; i<hal->socket_n_clients; i++){
@@ -148,290 +152,322 @@ static void HAL_socket_accept(struct HAL_t *hal)
     hal->socket_n_clients++;
 }
 
+static inline bool HAL_readbyte_timeout(
+    struct HAL_t *hal, 
+    unsigned char *dest, 
+    double timeout_s, 
+    int n_retry
+){
+    int r = 0;
+    for (int j=0; j<n_retry; j++){
+        r = read(hal->serial_fd, dest, 1);
+        if (r == 1) break;
+        else minisleep(timeout_s);
+    }
+    return (r == 1);
+}
+
+static inline bool HAL_reset_msg(HALMsg *msg)
+{
+    memset(msg, 0, sizeof(HALMsg));
+    return false;
+}
+
+static bool HAL_sync_read(
+    struct HAL_t *hal,
+    HALCommand cmd,
+    HALMsg *res,
+    size_t retry
+){
+    size_t i;
+    unsigned char b = 0;
+
+    for (i=0; i<retry && b != cmd; i++)
+        HAL_readbyte_timeout(hal, &b, 0.0001, 5);
+    if (b != cmd) 
+        return HAL_reset_msg(res);
+
+    unsigned char *buf = (unsigned char *) res;
+    for (i=1; i<3; i++)
+        if (! HAL_readbyte_timeout(hal, buf+i, 0.0001, 5))
+            return HAL_reset_msg(res);
+
+    for (i=0; i<res->len; i++)
+        if (! HAL_readbyte_timeout(hal, buf+i, 0.0001, 5))
+            return HAL_reset_msg(res);
+
+    return HALMsg_checksum(res) == res->chk;
+}
+
+static bool HAL_read_msg(struct HAL_t *hal, HALMsg *res)
+{
+    unsigned char i;
+    unsigned char *buf = (unsigned char *) res;
+
+    for (i=0; i<4; i++)
+        if (! HAL_readbyte_timeout(hal, buf+i, 0.0001, 5))
+            return HAL_reset_msg(res);
+
+    for (i=0; i<res->len; i++)
+        if (! HAL_readbyte_timeout(hal, buf+i, 0.0001, 5))
+            return HAL_reset_msg(res);
+
+    return HALMsg_checksum(res) == res->chk;
+}
+
+static void HAL_send_msg(struct HAL_t *hal, HALMsg *msg)
+{
+    const unsigned char *buf = (const unsigned char *) msg;
+    size_t len = msg->len + 4;
+
+    msg->chk = HALMsg_checksum(msg);
+    for (size_t i=0; i<len; i++){
+        for (int j=0; j<5; j++){
+            if (serialport_writebyte(hal->serial_fd, buf[i]) != 0)
+                minisleep(0.001);
+            else
+                break;
+        }
+    }
+
+    printf("\033[31;1 << %c%hhu [%hhu]\033[0m\n", msg->cmd, msg->rid, msg->len);
+    hal->tx_bytes += msg->len + 4;
+}
+
 /* Main input routine */
 void *HAL_read_thread(void *args)
 {
-    char buf[128];
-    char *line, cmd;
-    size_t len;
-    int val, i;
-
     struct HAL_t *hal = (struct HAL_t *) args;
+    HALMsg msg;
+    HALResource *res;
 
     while (true){
+        res = NULL;
         HAL_socket_accept(hal);
 
-        if (! serialport_read_until(hal->serial_fd, buf, '\n', sizeof(buf), 100))
+        if (! HAL_read_msg(hal, &msg))
             continue;
 
-        hal->rx_bytes += strlen(buf);
+        pthread_mutex_lock(&hal->mutex);
+        hal->rx_bytes += msg.len + 4;
+        pthread_mutex_unlock(&hal->mutex);
 
-        line = strip(buf);
-        len = strlen(line);
-        if (len == 0)
-            continue;
+        printf("\033[32;1 >> %c%hhu [%hhu]\033[0m\n", msg.cmd, msg.rid, msg.len);
 
-        printf("\033[1;33m>> [%lu] %s\033[0m\n", len, line);
-
-        cmd = line[0];
-
-        /* PING/PONG (initiated by Arduino) */
-        if (streq(line, "*"))
-            serialport_writebyte(hal->serial_fd, '*');
-
-        /* 
-        * Trigger state change;
-        * Trigger state response upon request;
-        * Switch state 
-        */
-        else if (cmd == 'T' || cmd == '!' || cmd == 'S'){
-            HALResource *resource = NULL;
-
-            val = line[len-1] == '1';
-            line[len-1] = '\0';
-            i = strtol(line+1, NULL, 10);
-            
-            switch (cmd){
-                case 'T':
-                case '!': resource = hal->triggers+i; break;
-                case 'S': resource = hal->switchs+i; break;
-            }
-
-            pthread_mutex_lock(&(resource->hal->mutex));
-            /* Update value */
-            resource->data.b = (bool) val;
-
-            /* Notify potential readers that the value is available */
-            pthread_cond_signal(&(resource->cond));
-            pthread_mutex_unlock(&(resource->hal->mutex));
-
-            /* If state change, also write to socket */
-            if (cmd == '!'){
-                strcpy(buf, resource->name);
-                strcat(buf, val ? ":1\n" : ":0\n");
-                HAL_socket_write(hal, buf);
-            }
+        if (IS(msg, PING)){
+            HAL_reset_msg(&msg);
+            msg.cmd = PING;
+            pthread_mutex_lock(&hal->mutex);
+            HAL_send_msg(hal, &msg);
+            pthread_mutex_unlock(&hal->mutex);
         }
+        else if (IS(msg, SENSOR)){
+            if ((msg.rid) >= hal->n_sensors)
+                continue;
+            res = hal->sensors + msg.rid;
+            float val = (((msg.data[0])<<8) | (msg.data[1])); // MSB first
+            val /= 1023;
 
-        /* Sensor value */
-        else if (cmd == 'C'){
-            HALResource *sensor = NULL;
-            char *sep = strchr(line, ':');
-            *sep = '\0';
-            int id = strtol(line+1, NULL, 10);
+            HAL_LOCK(res);
+            res->data.f = val;
+            HAL_SIGNAL(res);
+            HAL_UNLOCK(res);
+        } 
+        else if (IS(msg, TRIGGER)){
+            if ((msg.rid) >= hal->n_triggers)
+                continue;
+            res = hal->triggers + msg.rid;
 
-            sensor = hal->sensors+id;
-            sep++;
-
-            int val = strtol(sep, NULL, 10);
-
-            pthread_mutex_lock(&sensor->hal->mutex);
-            sensor->data.f = ((float) val)/1023;
-            pthread_cond_signal(&sensor->cond);
-            pthread_mutex_unlock(&sensor->hal->mutex);
+            HAL_LOCK(res);
+            res->data.b = msg.data[0] != 0;
+            HAL_SIGNAL(res);
+            HAL_UNLOCK(res);
         }
+        else if (IS(msg, SWITCH)){
+            if ((msg.rid) >= hal->n_switchs)
+                continue;
+            res = hal->switchs + msg.rid;
 
-        /* Animation attributes change */
-        else if (cmd == 'a'){
-            HALResource *anim = NULL;
-            char *sep = strchr(line, ':');
-            *sep = '\0';
-            int id = strtol(line+1, NULL, 10);
+            HAL_LOCK(res);
+            res->data.b = msg.data[0] != 0;
+            HAL_SIGNAL(res);
+            HAL_UNLOCK(res);
+        }
+        else {
+            // Asume it's an animation for now (will be discarded later if not)
+            if (msg.rid >= hal->n_animations)
+                continue;
+            res = hal->animations + msg.rid;
 
-            anim = hal->animations+id;
-            sep++;
-
-            pthread_mutex_lock(&(anim->hal->mutex));
-            /* Update value */
-            switch (*sep){
-                case 'l': anim->data.hhu4[0] = (sep[1] == '1'); break;
-                case 'p': anim->data.hhu4[1] = (sep[1] == '1'); break;
-                case 'd': 
-                    id = strtol(sep+1, NULL, 10);
-                    anim->data.hhu4[2] = id;
+            if (IS(msg, ANIMATION_PLAY)){
+                HAL_LOCK(res);
+                res->data.hhu4[1] = msg.data[0] != 0;
+                HAL_SIGNAL(res);
+                HAL_UNLOCK(res);
             }
-
-            /* Notify potential readers that the value is available */
-            pthread_cond_signal(&(anim->cond));
-            pthread_mutex_unlock(&(anim->hal->mutex));
-        }
-
-        else if (cmd == 'A'){
-            HALResource *anim = NULL;
-            char *sep = strchr(line, ':');
-            *sep = '\0';
-            int id = strtol(line+1, NULL, 10);
-            anim = hal->animations+id;
-            pthread_mutex_lock(&(anim->hal->mutex));
-            pthread_cond_signal(&(anim->cond));
-            pthread_mutex_unlock(&(anim->hal->mutex));
+            else if (IS(msg, ANIMATION_LOOP)){
+                HAL_LOCK(res);
+                res->data.hhu4[0] = msg.data[0] != 0;
+                HAL_SIGNAL(res);
+                HAL_UNLOCK(res);
+            }
+            else if (IS(msg, ANIMATION_DELAY)){
+                HAL_LOCK(res);
+                res->data.hhu4[2] = msg.data[0];
+                if (res->data.hhu4[2] == 0)
+                    res->data.hhu4[2] = 1; // Avoid zero-div error
+                HAL_SIGNAL(res);
+                HAL_UNLOCK(res);
+            }
+            else if (IS(msg, ANIMATION_FRAMES)){
+                HAL_LOCK(res);
+                HAL_SIGNAL(res);
+                HAL_UNLOCK(res);
+            }
         }
     }
+
     return NULL;
 }
 
-typedef const unsigned char cuchar;
-
-/* Send bytes on arduino serial link */
-#define say(hal, char_array) HAL_say((hal), sizeof(char_array), (char_array))
-static inline void HAL_say(struct HAL_t *hal, size_t len, cuchar *bytes)
+int HAL_ask_trigger(HALResource *trigger, bool *res)
 {
-    printf("\033[31;1m<< ");
-    int j;
-    for (size_t i=0; i<len; i++){
-        if (('a'<=bytes[i] && bytes[i]<='z') || ('A'<=bytes[i] && bytes[i]<='Z') || ('0'<=bytes[i] && bytes[i]<='9'))
-            putchar(bytes[i]);
-        else
-            printf("<%02hhx>", bytes[i]);            
-        for (j=0; j<5; j++){
-            if (serialport_writebyte(hal->serial_fd, bytes[i]) != 0)
-                minisleep(0.001);
-            else break;
-        }
-        if (j == 5)
-            printf("\033[43m(ERR)\033[0;31;1m");
-        else
-            hal->tx_bytes++;
-    }
-    printf("\033[0m\n");
+    HALMsg req = {.cmd=(ASK|TRIGGER), .rid=trigger->id, .len=0};
+    HAL_LOCK(trigger);
+    HAL_send_msg(trigger->hal, &req);
+    if (HAL_WAIT(trigger) != 0)
+        return -EAGAIN;
+    *res = trigger->data.b;
+    HAL_UNLOCK(trigger);
+    return 0;
 }
 
-bool HAL_ask_trigger(HALResource *trigger)
+int HAL_set_switch(HALResource *sw, bool on)
 {
-    bool res = 0;
-    cuchar req[] = {'T', trigger->id};
+    HALMsg req = {.cmd=(CHANGE|SWITCH), .rid=sw->id, .len=1};
+    req.data[0] = on ? 1 : 0;
 
-    pthread_mutex_lock(&trigger->hal->mutex);
-    say(trigger->hal, req);
-    pthread_cond_wait(&trigger->cond, &trigger->hal->mutex);
-    res = trigger->data.b;
-    pthread_mutex_unlock(&trigger->hal->mutex);
-
-    return res;
+    HAL_LOCK(sw);
+    HAL_send_msg(sw->hal, &req);
+    if (HAL_WAIT(sw) != 0)
+        return -EAGAIN;
+    HAL_UNLOCK(sw);
+    return 0;
 }
 
-void HAL_set_switch(HALResource *sw, bool on)
+int HAL_ask_switch(HALResource *sw, bool *res)
 {
-    cuchar req[] = {'S', sw->id, on ? 1 : 0};
-
-    pthread_mutex_lock(&sw->hal->mutex);
-    say(sw->hal, req);
-    pthread_cond_wait(&sw->cond, &sw->hal->mutex);
-    pthread_mutex_unlock(&sw->hal->mutex);
+    HALMsg req = {.cmd=(ASK|SWITCH), .rid=sw->id, .len=0};
+    HAL_LOCK(sw);
+    HAL_send_msg(sw->hal, &req);
+    if (HAL_WAIT(sw) != 0)
+        return -EAGAIN;
+    *res = sw->data.b;
+    HAL_UNLOCK(sw);
+    return 0;
 }
 
-bool HAL_ask_switch(HALResource *sw)
-{
-    cuchar req[] = {'S', sw->id, 42};
-    bool res = false;
-
-    pthread_mutex_lock(&sw->hal->mutex);
-    say(sw->hal, req);
-    pthread_cond_wait(&sw->cond, &sw->hal->mutex);
-    res = sw->data.b;
-    pthread_mutex_unlock(&sw->hal->mutex);
-
-    return res;
-}
-
-void HAL_upload_anim(
+int HAL_upload_anim(
     HALResource *anim, 
     unsigned char len, 
     const unsigned char *frames
 ){
-    cuchar req[258] = {'A', anim->id, len};
-    memcpy((char*)req+3, frames, len);
+    HALMsg req = {.cmd=(CHANGE|ANIMATION_FRAMES), .rid=anim->id, .len=len};
+    memcpy(req.data, frames, len);
 
-    pthread_mutex_lock(&anim->hal->mutex);
-    HAL_say(anim->hal, len+3, req);
-    pthread_cond_wait(&anim->cond, &anim->hal->mutex);
-    pthread_mutex_unlock(&anim->hal->mutex);
+    HAL_LOCK(anim);
+    HAL_send_msg(anim->hal, &req);
+    if (HAL_WAIT(anim) != 0)
+        return -EAGAIN;
+    HAL_UNLOCK(anim);
+    return 0;
 }
 
-bool HAL_ask_anim_play(HALResource *anim)
+int HAL_ask_anim_play(HALResource *anim, bool *res)
 {
-    cuchar req[] = {'a', anim->id, 'p', 42};
-    bool res = false;
-
-    pthread_mutex_lock(&anim->hal->mutex);
-    say(anim->hal, req);
-    pthread_cond_wait(&anim->cond, &anim->hal->mutex);
-    res = anim->data.hhu4[1];
-    pthread_mutex_unlock(&anim->hal->mutex);
-
-    return res;
+    HALMsg req = {.cmd=(ASK|ANIMATION_PLAY), .rid=anim->id, .len=0};
+    HAL_LOCK(anim);
+    HAL_send_msg(anim->hal, &req);
+    if (HAL_WAIT(anim) != 0)
+        return -EAGAIN;
+    *res = anim->data.hhu4[1] ? true : false;
+    HAL_UNLOCK(anim);
+    return 0;
 }
 
-void HAL_set_anim_play(HALResource *anim, bool play)
+int HAL_set_anim_play(HALResource *anim, bool play)
 {
-    cuchar req[] = {'a', anim->id, 'p', play ? 1 : 0};
+    HALMsg req = {.cmd=(CHANGE|ANIMATION_PLAY), .rid=anim->id, .len=1};
+    req.data[0] = play ? 1 : 0;
 
-    pthread_mutex_lock(&anim->hal->mutex);
-    say(anim->hal, req);
-    pthread_cond_wait(&anim->cond, &anim->hal->mutex);
-    pthread_mutex_unlock(&anim->hal->mutex);
+    HAL_LOCK(anim);
+    HAL_send_msg(anim->hal, &req);
+    if (HAL_WAIT(anim) != 0)
+        return -EAGAIN;
+    HAL_UNLOCK(anim);
+    return 0;
 }
 
-bool HAL_ask_anim_loop(HALResource *anim)
+int HAL_ask_anim_loop(HALResource *anim, bool *res)
 {
-    cuchar req[] = {'a', anim->id, 'l', 42};
-    bool res = false;
-
-    pthread_mutex_lock(&anim->hal->mutex);
-    say(anim->hal, req);
-    pthread_cond_wait(&anim->cond, &anim->hal->mutex);
-    res = anim->data.hhu4[0];
-    pthread_mutex_unlock(&anim->hal->mutex);
-
-    return res;
+    HALMsg req = {.cmd=(ASK|ANIMATION_LOOP), .rid=anim->id, .len=0};
+    HAL_LOCK(anim);
+    HAL_send_msg(anim->hal, &req);
+    if (HAL_WAIT(anim) != 0)
+        return -EAGAIN;
+    *res = anim->data.hhu4[0] ? true : false;
+    HAL_UNLOCK(anim);
+    return 0;
 }
 
-void HAL_set_anim_loop(HALResource *anim, bool loop)
+int HAL_set_anim_loop(HALResource *anim, bool loop)
 {
-    cuchar req[] = {'a', anim->id, 'l', loop ? 1 : 0};
+    HALMsg req = {.cmd=(CHANGE|ANIMATION_LOOP), .rid=anim->id, .len=1};
+    req.data[0] = loop ? 1 : 0;
 
-    pthread_mutex_lock(&anim->hal->mutex);
-    say(anim->hal, req);
-    pthread_cond_wait(&anim->cond, &anim->hal->mutex);
-    pthread_mutex_unlock(&anim->hal->mutex);
+    HAL_LOCK(anim);
+    HAL_send_msg(anim->hal, &req);
+    if (HAL_WAIT(anim) != 0)
+        return -EAGAIN;
+    HAL_UNLOCK(anim);
+    return 0;
 }
 
-unsigned char HAL_ask_anim_delay(HALResource *anim)
+int HAL_ask_anim_delay(HALResource *anim, unsigned char *res)
 {
-    cuchar req[] = {'a', anim->id, 'd', 0};
-    unsigned char res = false;
-
-    pthread_mutex_lock(&anim->hal->mutex);
-    say(anim->hal, req);
-    pthread_cond_wait(&anim->cond, &anim->hal->mutex);
-    res = anim->data.hhu4[2];
-    pthread_mutex_unlock(&anim->hal->mutex);
-
-    return res;
+    HALMsg req = {.cmd=(ASK|ANIMATION_DELAY), .rid=anim->id, .len=0};
+    HAL_LOCK(anim);
+    HAL_send_msg(anim->hal, &req);
+    if (HAL_WAIT(anim) != 0)
+        return -EAGAIN;
+    *res = anim->data.hhu4[2];
+    HAL_UNLOCK(anim);
+    return 0;
 }
 
-void HAL_set_anim_delay(HALResource *anim, unsigned char delay)
+int HAL_set_anim_delay(HALResource *anim, unsigned char delay)
 {
-    cuchar req[] = {'a', anim->id, 'd', delay};
+    HALMsg req = {.cmd=(CHANGE|ANIMATION_DELAY), .rid=anim->id, .len=1};
+    req.data[0] = delay;
 
-    pthread_mutex_lock(&anim->hal->mutex);
-    say(anim->hal, req);
-    pthread_cond_wait(&anim->cond, &anim->hal->mutex);
-    pthread_mutex_unlock(&anim->hal->mutex);
+    HAL_LOCK(anim);
+    HAL_send_msg(anim->hal, &req);
+    if (HAL_WAIT(anim) != 0)
+        return -EAGAIN;
+    HAL_UNLOCK(anim);
+    return 0;
 }
 
-float HAL_ask_sensor(HALResource *sensor)
+int HAL_ask_sensor(HALResource *sensor, float *res)
 {
-    cuchar req[] = {'C', sensor->id};
-    float res = 0;
-
-    pthread_mutex_lock(&sensor->hal->mutex);
-    say(sensor->hal, req);
-    pthread_cond_wait(&sensor->cond, &sensor->hal->mutex);
-    res = sensor->data.f;
-    pthread_mutex_unlock(&sensor->hal->mutex);
-
-    return res;
+    HALMsg req = {.cmd=(ASK|SENSOR), .rid=sensor->id, .len=0};
+    HAL_LOCK(sensor);
+    HAL_send_msg(sensor->hal, &req);
+    if (HAL_WAIT(sensor) != 0)
+        return -EAGAIN;
+    *res = sensor->data.f;
+    HAL_UNLOCK(sensor);
+    return 0;
 }
 
 size_t HAL_rx_bytes(struct HAL_t *hal)

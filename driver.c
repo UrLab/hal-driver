@@ -55,8 +55,10 @@ int tx_bytes_read(HALResource *backend, char * buffer, size_t size, off_t offset
 
 int trigger_read(HALResource *trig, char *buffer, size_t size, off_t offset)
 {
-    bool trig_state = HAL_ask_trigger(trig);
-    strcpy(buffer, trig_state ? "1\n" : "0\n");
+    bool active = false;
+    if (HAL_ask_trigger(trig, &active) != 0)
+        return -EAGAIN;
+    strcpy(buffer, active ? "1\n" : "0\n");
     return 2;
 }
 
@@ -64,35 +66,42 @@ int binary_size(HALResource *backend){return 2;}
 
 int switch_read(HALResource *sw, char *buffer, size_t size, off_t offset)
 {
-    bool switch_state = HAL_ask_switch(sw);
-    strcpy(buffer, switch_state ? "1\n" : "0\n");
+    bool active = false;
+    if (HAL_ask_switch(sw, &active) != 0)
+        return -EAGAIN;
+    strcpy(buffer, active ? "1\n" : "0\n");
     return 2;
 }
 
 int switch_write(HALResource *sw, const char *buffer, size_t size, off_t offset)
 {
     bool on = buffer[0] != '0';
-    HAL_set_switch(sw, on);
+    if (HAL_set_switch(sw, on) != 0)
+        return -EAGAIN;
     return size;
 }
 
 int animation_upload(HALResource *anim, const char *buffer, size_t size, off_t offset)
 {
     unsigned char s = (size < 256) ? size : 255;
-    HAL_upload_anim(anim, s, (const unsigned char*) buffer);
+    if (HAL_upload_anim(anim, s, (const unsigned char*) buffer))
+        return -EAGAIN;
     return s;
 }
 
 int anim_loop_write(HALResource *anim, const char *buffer, size_t size, off_t offset)
 {
     bool loop = buffer[0] != '0';
-    HAL_set_anim_loop(anim, loop);
+    if (HAL_set_anim_loop(anim, loop) != 0)
+        return -EAGAIN;
     return size;
 }
 
 int anim_loop_read(HALResource *anim, char *buffer, size_t size, off_t offset)
 {
-    bool looping = HAL_ask_anim_loop(anim);
+    bool looping = false;
+    if (HAL_ask_anim_loop(anim, &looping) != 0)
+        return -EAGAIN;
     strcpy(buffer, looping ? "1\n" : "0\n");
     return 2;
 }
@@ -100,13 +109,16 @@ int anim_loop_read(HALResource *anim, char *buffer, size_t size, off_t offset)
 int anim_play_write(HALResource *anim, const char *buffer, size_t size, off_t offset)
 {
     bool play = buffer[0] != '0';
-    HAL_set_anim_play(anim, play);
+    if (HAL_set_anim_play(anim, play) != 0)
+        return -EAGAIN;
     return size;
 }
 
 int anim_play_read(HALResource *anim, char *buffer, size_t size, off_t offset)
 {
-    bool playing = HAL_ask_anim_play(anim);
+    bool playing = false;
+    if (HAL_ask_anim_play(anim, &playing) != 0)
+        return -EAGAIN;
     strcpy(buffer, playing ? "1\n" : "0\n");
     return 2;
 }
@@ -127,16 +139,19 @@ int anim_fps_write(HALResource *anim, const char *buffer, size_t size, off_t off
     // uint8 delay = 1..255 == 4..1000 fps
     if (fps < 4)         fps = 4;
     else if (fps > 1000) fps = 1000;
-    unsigned int delay = 1000/fps;
+    unsigned char delay = 1000/fps;
 
-    HAL_set_anim_delay(anim, delay);
+    if (HAL_set_anim_delay(anim, delay) != 0)
+        return -EAGAIN;
     return size;
 }
 
 int anim_fps_read(HALResource *anim, char *buffer, size_t size, off_t offset)
 {
     int res;
-    float delay = HAL_ask_anim_delay(anim);
+    unsigned char delay = 0;
+    if (HAL_ask_anim_delay(anim, &delay) != 0)
+        return -EAGAIN;
     if (delay == 0) // Avoid zero division
         delay = 1;
     unsigned int fps = 1000/delay;
@@ -151,7 +166,9 @@ int sensor_size(HALResource *backend){return 13;}
 int sensor_read(HALResource *sensor, char *buffer, size_t size, off_t offset)
 {
     int res = 0;
-    float val = HAL_ask_sensor(sensor);
+    float val = 0;
+    if (HAL_ask_sensor(sensor, &val) != 0)
+        return -EAGAIN;
     snprintf(buffer, size, "%f\n%n", val, &res);
     return res;
 }
