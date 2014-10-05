@@ -6,7 +6,8 @@ TEST(checksum, {
     memset(&msg, 0, sizeof(msg));
 
     msg.cmd = VERSION;
-    ASSERT(IS(msg, VERSION));
+    ASSERT(CMD(&msg, VERSION));
+    ASSERT(! IS_CHANGE(&msg));
     ASSERT(HALMsg_checksum(&msg) == VERSION);
 
     msg.data[0] = 1;
