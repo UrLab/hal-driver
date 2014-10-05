@@ -281,39 +281,49 @@ void *HAL_read_thread(void *args)
 
 int HAL_ask_trigger(HALResource *trigger, bool *res)
 {
+    int ret = 0;
     HALMsg req = {.cmd=(PARAM_ASK|TRIGGER), .rid=trigger->id, .len=0};
+
     HAL_LOCK(trigger);
     HALMsg_write(trigger->hal, &req);
     if (HAL_WAIT(trigger) != 0)
-        return -EAGAIN;
-    *res = trigger->data.b;
+        ret = -EAGAIN;
+    else
+        *res = trigger->data.b;
     HAL_UNLOCK(trigger);
-    return 0;
+
+    return ret;
 }
 
 int HAL_set_switch(HALResource *sw, bool on)
 {
+    int ret = 0;
     HALMsg req = {.cmd=(PARAM_CHANGE|SWITCH), .rid=sw->id, .len=1};
     req.data[0] = on ? 1 : 0;
 
     HAL_LOCK(sw);
     HALMsg_write(sw->hal, &req);
     if (HAL_WAIT(sw) != 0)
-        return -EAGAIN;
+        ret = -EAGAIN;
     HAL_UNLOCK(sw);
-    return 0;
+
+    return ret;
 }
 
 int HAL_ask_switch(HALResource *sw, bool *res)
 {
+    int ret = 0;
     HALMsg req = {.cmd=(PARAM_ASK|SWITCH), .rid=sw->id, .len=0};
+
     HAL_LOCK(sw);
     HALMsg_write(sw->hal, &req);
     if (HAL_WAIT(sw) != 0)
-        return -EAGAIN;
-    *res = sw->data.b;
+        ret = -EAGAIN;
+    else
+        *res = sw->data.b;
     HAL_UNLOCK(sw);
-    return 0;
+    
+    return ret;
 }
 
 int HAL_upload_anim(
@@ -321,102 +331,126 @@ int HAL_upload_anim(
     unsigned char len, 
     const unsigned char *frames
 ){
+    int ret = 0;
     HALMsg req = {.cmd=(PARAM_CHANGE|ANIMATION_FRAMES), .rid=anim->id, .len=len};
     memcpy(req.data, frames, len);
 
     HAL_LOCK(anim);
     HALMsg_write(anim->hal, &req);
     if (HAL_WAIT(anim) != 0)
-        return -EAGAIN;
+        ret = -EAGAIN;
     HAL_UNLOCK(anim);
-    return 0;
+
+    return ret;
 }
 
 int HAL_ask_anim_play(HALResource *anim, bool *res)
 {
+    int ret = 0;
     HALMsg req = {.cmd=(PARAM_ASK|ANIMATION_PLAY), .rid=anim->id, .len=0};
+
     HAL_LOCK(anim);
     HALMsg_write(anim->hal, &req);
     if (HAL_WAIT(anim) != 0)
-        return -EAGAIN;
-    *res = anim->data.hhu4[1] ? true : false;
+        ret = -EAGAIN;
+    else
+        *res = anim->data.hhu4[1] ? true : false;
     HAL_UNLOCK(anim);
-    return 0;
+
+    return ret;
 }
 
 int HAL_set_anim_play(HALResource *anim, bool play)
 {
+    int ret = 0;
     HALMsg req = {.cmd=(PARAM_CHANGE|ANIMATION_PLAY), .rid=anim->id, .len=1};
     req.data[0] = play ? 1 : 0;
 
     HAL_LOCK(anim);
     HALMsg_write(anim->hal, &req);
     if (HAL_WAIT(anim) != 0)
-        return -EAGAIN;
+        ret = -EAGAIN;
     HAL_UNLOCK(anim);
-    return 0;
+
+    return ret;
 }
 
 int HAL_ask_anim_loop(HALResource *anim, bool *res)
 {
+    int ret = 0;
     HALMsg req = {.cmd=(PARAM_ASK|ANIMATION_LOOP), .rid=anim->id, .len=0};
+
     HAL_LOCK(anim);
     HALMsg_write(anim->hal, &req);
     if (HAL_WAIT(anim) != 0)
-        return -EAGAIN;
-    *res = anim->data.hhu4[0] ? true : false;
+        ret = -EAGAIN;
+    else
+        *res = anim->data.hhu4[0] ? true : false;
     HAL_UNLOCK(anim);
-    return 0;
+
+    return ret;
 }
 
 int HAL_set_anim_loop(HALResource *anim, bool loop)
 {
+    int ret = 0;
     HALMsg req = {.cmd=(PARAM_CHANGE|ANIMATION_LOOP), .rid=anim->id, .len=1};
     req.data[0] = loop ? 1 : 0;
 
     HAL_LOCK(anim);
     HALMsg_write(anim->hal, &req);
     if (HAL_WAIT(anim) != 0)
-        return -EAGAIN;
+        ret = -EAGAIN;
     HAL_UNLOCK(anim);
-    return 0;
+
+    return ret;
 }
 
 int HAL_ask_anim_delay(HALResource *anim, unsigned char *res)
 {
+    int ret = 0;
     HALMsg req = {.cmd=(PARAM_ASK|ANIMATION_DELAY), .rid=anim->id, .len=0};
+
     HAL_LOCK(anim);
     HALMsg_write(anim->hal, &req);
     if (HAL_WAIT(anim) != 0)
-        return -EAGAIN;
-    *res = anim->data.hhu4[2];
+        ret = -EAGAIN;
+    else
+        *res = anim->data.hhu4[2];
     HAL_UNLOCK(anim);
-    return 0;
+    
+    return ret;
 }
 
 int HAL_set_anim_delay(HALResource *anim, unsigned char delay)
 {
+    int ret = 0;
     HALMsg req = {.cmd=(PARAM_CHANGE|ANIMATION_DELAY), .rid=anim->id, .len=1};
     req.data[0] = delay;
 
     HAL_LOCK(anim);
     HALMsg_write(anim->hal, &req);
     if (HAL_WAIT(anim) != 0)
-        return -EAGAIN;
+        ret = -EAGAIN;
     HAL_UNLOCK(anim);
-    return 0;
+
+    return ret;
 }
 
 int HAL_ask_sensor(HALResource *sensor, float *res)
 {
+    int ret = 0;
     HALMsg req = {.cmd=(PARAM_ASK|SENSOR), .rid=sensor->id, .len=0};
+
     HAL_LOCK(sensor);
     HALMsg_write(sensor->hal, &req);
     if (HAL_WAIT(sensor) != 0)
-        return -EAGAIN;
-    *res = sensor->data.f;
+        ret = -EAGAIN;
+    else
+        *res = sensor->data.f;
     HAL_UNLOCK(sensor);
-    return 0;
+
+    return ret;
 }
 
 size_t HAL_rx_bytes(struct HAL_t *hal)
