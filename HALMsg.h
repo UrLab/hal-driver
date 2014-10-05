@@ -50,7 +50,7 @@ static inline void DESCRIBE(HALMsg *msg)
 
 static inline bool CMD(HALMsg *msg, HALCommand type)
 {
-    return ((msg->cmd & ~PARAM_CHANGE) & type) == type;
+    return (msg->cmd & ~PARAM_CHANGE) == type;
 }
 
 static inline bool IS_CHANGE(HALMsg *msg)
