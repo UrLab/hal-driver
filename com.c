@@ -203,9 +203,9 @@ void *HAL_read_thread(void *args)
         hal->rx_bytes += msg.len + 4;
         pthread_mutex_unlock(&hal->mutex);
 
-        if (CMD(&msg, PING)){
+        if (CMD(&msg, HAL_PING)){
             RESET(&msg);
-            msg.cmd = PING;
+            msg.cmd = HAL_PING;
             pthread_mutex_lock(&hal->mutex);
             HALMsg_write(hal, &msg);
             pthread_mutex_unlock(&hal->mutex);
