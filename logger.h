@@ -1,8 +1,10 @@
 #ifndef DEFINE_LOGGER_HEADER
 #define DEFINE_LOGGER_HEADER
 
+#ifndef LOG_LEVEL
 /* Default definition of the log level for whole program */
 #define LOG_LEVEL LOGLVL_INFO
+#endif
 
 #define LOGLVL_ERROR 1
 #define LOGLVL_WARN  2
