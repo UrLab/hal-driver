@@ -47,7 +47,7 @@ static inline int HAL_WAIT(HALResource *r)
     DEBUG("WAIT %s (until %ds %dns)", r->name, (int) until.tv_sec, (int) until.tv_nsec);
     int res = pthread_cond_timedwait(&(r->cond), &(r->hal->mutex), &until);
     if (res == ETIMEDOUT)
-        DEBUG("WAIT TIMEOUT %s", r->name);
+        WARN("WAIT TIMEOUT %s", r->name);
     return res;
 }
 
