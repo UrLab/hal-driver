@@ -43,7 +43,7 @@ arduino-serial-lib -- simple library for reading/writing serial ports
 void minisleep(double secs)
 {
     int seconds = secs;
-    int micros = secs*1000000 - seconds;
+    int micros = (secs - seconds)*1000000;
 
     struct timeval interval = {seconds, micros};
     select(1, NULL, NULL, NULL, &interval);

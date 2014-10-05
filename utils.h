@@ -2,6 +2,8 @@
 #define DEFINE_UTILS_HEADER
 
 #include <stdbool.h>
+#include <unistd.h>
+#include <sys/select.h>
 
 static inline bool streq(const char *s1, const char *s2)
 {
@@ -35,6 +37,15 @@ static inline char *rstrip(char *str, const char *junk)
         str[i] = '\0';
     }
     return str;
+}
+
+static inline void minisleep(double secs)
+{
+    int seconds = secs;
+    int micros = (secs - seconds)*1000000;
+
+    struct timeval interval = {seconds, micros};
+    select(1, NULL, NULL, NULL, &interval);
 }
 
 #endif

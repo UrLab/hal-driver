@@ -53,10 +53,9 @@ struct HAL_t {
     HALResource *animations;
 };
 
-static inline HALResource *HALResource_init(HALResource *res, const char *name, char type, char id, HAL_t *hal)
+static inline HALResource *HALResource_init(HALResource *res, const char *name, char id, HAL_t *hal)
 {
     res->name = strdup(name);
-    res->type = type;
     res->id = id;
     res->hal = hal;
     pthread_cond_init(&res->cond, NULL);

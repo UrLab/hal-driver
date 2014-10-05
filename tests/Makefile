@@ -1,12 +1,15 @@
-ALL_TESTS_OK: test_HALFS.ok
+ALL_TESTS_OK: test_HALFS.ok test_HALMsg.ok
 	touch $@
 
 include ../Makefile.flags
 
 %.ok: %.test
-	./$< && touch $@
+	./$< -v && touch $@
 
 test_HALFS.test: test_HALFS.c ../HALFS.c
+	gcc ${DEFINES} ${CFLAGS} ${LDFLAGS} $^ -o $@
+
+test_HALMsg.test: test_HALMsg.c
 	gcc ${DEFINES} ${CFLAGS} ${LDFLAGS} $^ -o $@
 
 clean:

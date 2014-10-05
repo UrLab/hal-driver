@@ -1,7 +1,7 @@
 include Makefile.flags
 
 TARGET = driver
-OBJS = HALFS.o arduino-serial-lib.o com.o
+OBJS = HALFS.o arduino-serial-lib.o com.o HALMsg.o
 
 all: ${TARGET}
 

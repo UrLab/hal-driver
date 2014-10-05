@@ -11,6 +11,7 @@
 #include "HALFS.h"
 #include "com.h"
 #include "utils.h"
+#include "logger.h"
 
 static uid_t my_uid;
 static gid_t my_gid;
@@ -278,16 +279,17 @@ void * HALFS_init(struct fuse_conn_info *conn)
             flag = flag | GLOB_APPEND;
         glob(ARDUINO_DEV_PATH[i], flag, NULL, &globbuf);
     }
-    printf("Found %lu possible arduinos in /dev/\n", (long unsigned int) globbuf.gl_pathc);
+    INFO("Found %lu possible arduinos in /dev/", (long unsigned int) globbuf.gl_pathc);
     for (size_t i = 0; i < globbuf.gl_pathc; i++){
-        printf("Trying %s\n", globbuf.gl_pathv[i]);
+        DEBUG("Trying %s", globbuf.gl_pathv[i]);
         if (HAL_init(&hal, globbuf.gl_pathv[i]))
             break;
+        WARN("Skip %s", globbuf.gl_pathv[i]);
     }
     globfree(&globbuf);
 
     if (! hal.ready){
-        fprintf(stderr, "Unable to find suitable arduino; force quit\n");
+        ERROR("Unable to find suitable arduino; force quit");
         exit(EXIT_FAILURE);
     }
     HAL_socket_open(&hal, "/tmp/hal.sock");
@@ -317,10 +319,7 @@ static int HALFS_read(
     int res = -ENOENT;
     if (file){
         res = file->ops.read(file->backend, buf, size, offset);
-        printf("\033[1;35mREAD %s[%lu/%d]: \033[0m", path, size, res);
-        for (int i=0; i<res; i++)
-            printf("%02x", buf[i]);
-        puts("");
+        DEBUG("Finished READ %s (call len:%lu return len:%d)", path, size, res);
     }
     return res;
 }
@@ -337,10 +336,7 @@ static int HALFS_write(
     int res = -ENOENT;
     if (file){
         res = file->ops.write(file->backend, buf, size, offset);
-        printf("\033[1;35mWRITE %s[%lu/%d]: \033[0m", path, size, res);
-        for (int i=0; i<res; i++)
-            printf("%02hhx", buf[i]);
-        puts("");
+        DEBUG("Finished WRITE %s (call len:%lu return len:%d)", path, size, res);
     }
     return res;
 }
