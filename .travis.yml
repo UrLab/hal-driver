@@ -5,4 +5,13 @@ compiler:
 before_install:
  - sudo apt-get update -qq
  - sudo apt-get install -qq libfuse-dev arduino-core
-script: make && make tests
+script: "make && make tests"
+notifications:
+  irc:
+    channels:
+      - "chat.freenode.org#titoufaitdestests"
+    template:
+      - "%{repository_name} (%{branch}:%{commit}) %{commit_message} : %{message}"
+      - "Build details: %{build_url}"
+    on_success: change
+    on_failure: always
