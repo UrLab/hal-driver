@@ -228,6 +228,11 @@ void *HAL_read_thread(void *args)
             res = hal->triggers + msg.rid;
 
             HAL_LOCK(res);
+            if (IS_CHANGE(&msg)){
+                char buf[32];
+                snprintf(buf, 20, "%s:%hhu\n", res->name, msg.data[0]);
+                HAL_socket_write(hal, buf);
+            }
             res->data.b = msg.data[0] != 0;
             HAL_SIGNAL(res);
             HAL_UNLOCK(res);
