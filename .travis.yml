@@ -15,3 +15,5 @@ notifications:
       - "Build details: %{build_url}"
     on_success: change
     on_failure: always
+    use_notice: true
+
