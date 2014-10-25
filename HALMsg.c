@@ -47,7 +47,6 @@ static inline unsigned char read_byte(int fd)
     while (r != 1){
         r = read(fd, &b, 1);
         minisleep(0.001);
-        fflush(stdout);
     }
     return b;
 }
