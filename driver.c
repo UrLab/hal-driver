@@ -180,7 +180,8 @@ int uptime_size(HALResource *backend)
 {
     time_t dt = time(NULL) - start_time;
     int res = 0;
-    snprintf(buffer, size, "%ld\n%n", dt, &res);
+    char buffer[100];
+    sprintf(buffer, "%ld\n%n", dt, &res);
     return res;
 }
 
