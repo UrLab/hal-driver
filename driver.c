@@ -8,11 +8,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fuse.h>
+#include <time.h>
 #include "HALFS.h"
 #include "com.h"
 #include "utils.h"
 #include "logger.h"
 
+static time_t start_time;
 static uid_t my_uid;
 static gid_t my_gid;
 static pthread_t com_thread;
@@ -174,6 +176,21 @@ int sensor_read(HALResource *sensor, char *buffer, size_t size, off_t offset)
     return res;
 }
 
+int uptime_size(HALResource *backend)
+{
+    time_t dt = time(NULL) - start_time;
+    int res = 0;
+    snprintf(buffer, size, "%ld\n%n", dt, &res);
+    return res;
+}
+
+int uptime_read(HALResource *sensor, char *buffer, size_t size, off_t offset)
+{
+    time_t dt = time(NULL) - start_time;
+    snprintf(buffer, size, "%ld\n", dt);
+    return size;
+}
+
 /*
  * Build HALFS tree structure from detected I/O
  */
@@ -195,6 +212,9 @@ static void HALFS_build()
     file = HALFS_insert(HALFS_root, "/driver/tx_bytes");
     file->ops.read = tx_bytes_read;
     file->ops.size = sensor_size;
+    file = HALFS_insert(HALFS_root, "/driver/uptime");
+    file->ops.size = uptime_size;
+    file->ops.read = uptime_read;
 
     file = HALFS_insert(HALFS_root, "/events");
     file->ops.mode = 0444;
@@ -436,5 +456,6 @@ static struct fuse_operations hal_ops = {
 
 int main(int argc, char *argv[])
 {
+    start_time = time(NULL);
     return fuse_main(argc, argv, &hal_ops, NULL);
 }
