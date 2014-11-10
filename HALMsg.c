@@ -34,10 +34,10 @@ void HALMsg_write(HAL_t *hal, HALMsg *msg)
     for (unsigned char i=0; i<msg->len; i++)
         write_byte(hal->serial_fd, msg->data[i]);
 
+    hal->tx_bytes += 4 + msg->len;
 
-    if (LOG_LEVEL >= 4){
+    if (LOG_LEVEL >= 4)
         printf("\033[31m << "); DESCRIBE(msg); printf("\033[0m\n");
-    }
 }
 
 static inline unsigned char read_byte(int fd)
