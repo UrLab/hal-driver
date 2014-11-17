@@ -57,8 +57,11 @@ static inline void HALMsg_read_atoffset(HAL_t *hal, HALMsg *res, size_t offset)
     unsigned char *buf = (unsigned char *) res;
 
     /* Read header */
-    for (size_t i=offset; i<4; i++)
+    for (size_t i=offset; i<4; i++){
         buf[i] = read_byte(hal->serial_fd);
+        if (buf[i] == BOOT && res->cmd != BOOT)
+            return HALMsg_read_atoffset(hal, res, 0);
+    }
 
     for (unsigned char i=0; i<res->len; i++)
         res->data[i] = read_byte(hal->serial_fd);
