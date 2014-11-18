@@ -10,6 +10,7 @@
 #define LOGLVL_WARN  2
 #define LOGLVL_INFO  3
 #define LOGLVL_DEBUG 4
+#define LOGLVL_COM   5 //Print all sent/received messages
 
 #define DEBUG(fmt, ...) if (LOG_LEVEL >= LOGLVL_DEBUG) printf("\033[1;34m (D) " fmt "\033[0m\n", ##__VA_ARGS__)
 #define INFO(fmt, ...) if (LOG_LEVEL >= LOGLVL_INFO) printf("\033[1;32m (I) " fmt "\033[0m\n", ##__VA_ARGS__)
