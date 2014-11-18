@@ -67,64 +67,59 @@ bool HAL_init(struct HAL_t *hal, const char *arduino_dev)
     RESET(&msg);
     HALMsg_read_command(hal, &msg, BOOT);
 
-    has_boot:
-        msg.cmd = VERSION;
-        HALMsg_write(hal, &msg);
+    msg.cmd = VERSION;
+    HALMsg_write(hal, &msg);
 
-        do {
-            HALMsg_read(hal, &msg);
-            if (msg.cmd == BOOT)
-                goto has_boot;
-        } while (! CMD(&msg, VERSION));
+    do {HALMsg_read(hal, &msg);} while (! CMD(&msg, VERSION));
 
-        if (msg.len < 40){
-            ERROR("Invalid Arduino version");
+    if (msg.len < 40){
+        ERROR("Invalid Arduino version");
+        goto fail;
+    }
+    memcpy(hal->version, msg.data, 40);
+    INFO("Arduino version: %40s", msg.data);
+
+    RESET(&msg);
+    msg.cmd = TREE;
+    HALMsg_write(hal, &msg);
+
+    for (int i=0; i<4; i++){
+        do HALMsg_read(hal, &msg); while (! CMD(&msg, TREE));
+        if (! IS_VALID(&msg)){
+            ERROR("Invalid message received (bad checksum)");
             goto fail;
         }
-        memcpy(hal->version, msg.data, 40);
-        INFO("Arduino version: %40s", msg.data);
 
-        RESET(&msg);
-        msg.cmd = TREE;
-        HALMsg_write(hal, &msg);
+        size_t N = msg.rid;
+        HALResource *res = calloc(N, sizeof(HALResource));
+        if (! res){
+            ERROR("Memory allocation error");
+            goto fail;
+        }
 
-        for (int i=0; i<4; i++){
-            do HALMsg_read(hal, &msg); while (! CMD(&msg, TREE));
+        if (msg.data[0] == SENSOR){hal->n_sensors = N; hal->sensors = res;}
+        else if (msg.data[0] == TRIGGER){hal->n_triggers = N; hal->triggers = res;}
+        else if (msg.data[0] == SWITCH){hal->n_switchs = N; hal->switchs = res;}
+        else if (msg.data[0] == ANIMATION_FRAMES){hal->n_animations = N; hal->animations = res;}
+        else goto fail;
+        INFO("Loading %lu resources of type %c",N, msg.data[0]);
+
+        for (size_t j=0; j<N; j++){
+            HALMsg_read(hal, &msg);
             if (! IS_VALID(&msg)){
                 ERROR("Invalid message received (bad checksum)");
                 goto fail;
             }
-
-            size_t N = msg.rid;
-            HALResource *res = calloc(N, sizeof(HALResource));
-            if (! res){
-                ERROR("Memory allocation error");
-                goto fail;
-            }
-
-            if (msg.data[0] == SENSOR){hal->n_sensors = N; hal->sensors = res;}
-            else if (msg.data[0] == TRIGGER){hal->n_triggers = N; hal->triggers = res;}
-            else if (msg.data[0] == SWITCH){hal->n_switchs = N; hal->switchs = res;}
-            else if (msg.data[0] == ANIMATION_FRAMES){hal->n_animations = N; hal->animations = res;}
-            else goto fail;
-            INFO("Loading %lu resources of type %c",N, msg.data[0]);
-
-            for (size_t j=0; j<N; j++){
-                HALMsg_read(hal, &msg);
-                if (! IS_VALID(&msg)){
-                    ERROR("Invalid message received (bad checksum)");
-                    goto fail;
-                }
-                msg.data[msg.len] = '\0';
-                HALResource_init(res+j, (const char *) msg.data, j, hal);
-                INFO("    Loaded [%lu] %s", j, res[j].name);
-            }
+            msg.data[msg.len] = '\0';
+            HALResource_init(res+j, (const char *) msg.data, j, hal);
+            INFO("    Loaded [%lu] %s", j, res[j].name);
         }
+    }
 
-        pthread_mutex_init(&hal->mutex, NULL);
-        hal->ready = true;
-        INFO("Ready !");
-        return true;
+    pthread_mutex_init(&hal->mutex, NULL);
+    hal->ready = true;
+    INFO("Ready !");
+    return true;
 
     fail:
         close(hal->serial_fd);
