@@ -36,8 +36,9 @@ void HALMsg_write(HAL_t *hal, HALMsg *msg)
 
     hal->tx_bytes += 4 + msg->len;
 
-    if (LOG_LEVEL >= LOGLVL_COM)
+    if (current_log_level >= LOGLVL_COM){
         printf("\033[31m << "); DESCRIBE(msg); printf("\033[0m\n");
+    }
 }
 
 static inline unsigned char read_byte(int fd)
@@ -69,7 +70,7 @@ static inline void HALMsg_read_atoffset(HAL_t *hal, HALMsg *res, size_t offset)
     for (unsigned char i=0; i<res->len; i++)
         res->data[i] = read_byte(hal->serial_fd);
 
-    if (LOG_LEVEL >= LOGLVL_COM){
+    if (current_log_level >= LOGLVL_COM){
         printf("\033[32m >> "); DESCRIBE(res); printf("\033[0m\n");
     }
 }

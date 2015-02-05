@@ -40,6 +40,27 @@ int version_read(HALResource *backend, char * buffer, size_t size, off_t offset)
     return l;
 }
 
+int loglevel_size(HALResource *backend){return 2;}
+
+int loglevel_read(HALResource *backend, char * buffer, size_t size, off_t offset)
+{
+    if (offset > 1)
+        return 0;
+    sprintf(buffer, "%d\n", current_log_level);
+    return 2;
+}
+
+int loglevel_write(HALResource *anim, const char *buffer, size_t size, off_t offset)
+{
+    for (size_t i=0; i<size; i++){
+        if (('0' <= buffer[i]) && (buffer[i] <= '9')){
+            current_log_level = buffer[i] - '0';
+            break;
+        }
+    }
+    return size;
+}
+
 int rx_bytes_read(HALResource *backend, char * buffer, size_t size, off_t offset)
 {
     int res = 0;
@@ -216,6 +237,10 @@ static void HALFS_build()
     file = HALFS_insert(HALFS_root, "/driver/uptime");
     file->ops.size = uptime_size;
     file->ops.read = uptime_read;
+    file = HALFS_insert(HALFS_root, "/driver/loglevel");
+    file->ops.size = loglevel_size;
+    file->ops.read = loglevel_read;
+    file->ops.write = loglevel_write;
 
     file = HALFS_insert(HALFS_root, "/events");
     file->ops.mode = 0444;

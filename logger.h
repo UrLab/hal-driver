@@ -1,6 +1,8 @@
 #ifndef DEFINE_LOGGER_HEADER
 #define DEFINE_LOGGER_HEADER
 
+extern int current_log_level;
+
 #ifndef LOG_LEVEL
 /* Default definition of the log level for whole program */
 #define LOG_LEVEL LOGLVL_INFO
@@ -12,9 +14,9 @@
 #define LOGLVL_DEBUG 4
 #define LOGLVL_COM   5 //Print all sent/received messages
 
-#define DEBUG(fmt, ...) if (LOG_LEVEL >= LOGLVL_DEBUG) printf("\033[1;34m (D) " fmt "\033[0m\n", ##__VA_ARGS__)
-#define INFO(fmt, ...) if (LOG_LEVEL >= LOGLVL_INFO) printf("\033[1;32m (I) " fmt "\033[0m\n", ##__VA_ARGS__)
-#define WARN(fmt, ...) if (LOG_LEVEL >= LOGLVL_WARN) printf("\033[1;33m (W) " fmt "\033[0m\n", ##__VA_ARGS__)
-#define ERROR(fmt, ...) if (LOG_LEVEL >= LOGLVL_ERROR) printf("\033[1;31m (E) " fmt "\033[0m\n", ##__VA_ARGS__)
+#define DEBUG(fmt, ...) if (current_log_level >= LOGLVL_DEBUG) printf("\033[1;34m (D) " fmt "\033[0m\n", ##__VA_ARGS__)
+#define INFO(fmt, ...) if (current_log_level >= LOGLVL_INFO) printf("\033[1;32m (I) " fmt "\033[0m\n", ##__VA_ARGS__)
+#define WARN(fmt, ...) if (current_log_level >= LOGLVL_WARN) printf("\033[1;33m (W) " fmt "\033[0m\n", ##__VA_ARGS__)
+#define ERROR(fmt, ...) if (current_log_level >= LOGLVL_ERROR) printf("\033[1;31m (E) " fmt "\033[0m\n", ##__VA_ARGS__)
 
 #endif

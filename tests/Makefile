@@ -9,7 +9,7 @@ include ../Makefile.flags
 test_HALFS.test: test_HALFS.c ../HALFS.c
 	gcc ${DEFINES} ${CFLAGS} ${LDFLAGS} $^ -o $@
 
-test_HALMsg.test: test_HALMsg.c ../HALMsg.c
+test_HALMsg.test: test_HALMsg.c ../HALMsg.c ../logger.c
 	gcc ${DEFINES} ${CFLAGS} ${LDFLAGS} $^ -o $@
 
 clean:
