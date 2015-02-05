@@ -13,6 +13,7 @@
 #include "com.h"
 #include "utils.h"
 #include "logger.h"
+#include "version.h"
 
 static time_t start_time;
 static uid_t my_uid;
@@ -31,12 +32,22 @@ const char *ARDUINO_DEV_PATH[] = {"/dev/tty.usbmodem*", "/dev/ttyUSB*", "/dev/tt
 int version_size(HALResource *backend){return 41;}
 
 /* cat /version */
-int version_read(HALResource *backend, char * buffer, size_t size, off_t offset)
+int arduino_version_read(HALResource *backend, char * buffer, size_t size, off_t offset)
 {
     if (offset > 40)
         return 0;
     int l = min(size, (size_t) 41-offset);
     sprintf(buffer, "%s\n", hal.version+offset);
+    return l;
+}
+
+/* cat /driver/version */
+int driver_version_read(HALResource *backend, char * buffer, size_t size, off_t offset)
+{
+    if (offset > 40)
+        return 0;
+    int l = min(size, (size_t) 41-offset);
+    sprintf(buffer, "%s\n", HAL_DRIVER_VERSION+offset);
     return l;
 }
 
@@ -225,7 +236,10 @@ static void HALFS_build()
     my_gid = getgid();
 
     HALFS * file = HALFS_insert(HALFS_root, "/version");
-    file->ops.read = version_read;
+    file->ops.read = arduino_version_read;
+    file->ops.size = version_size;
+    file = HALFS_insert(HALFS_root, "/driver/version");
+    file->ops.read = driver_version_read;
     file->ops.size = version_size;
 
     file = HALFS_insert(HALFS_root, "/driver/rx_bytes");

@@ -2,3 +2,4 @@ daemon
 driver
 halfs/
 *.o
+version.h
