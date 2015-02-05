@@ -158,6 +158,7 @@ static void HAL_socket_write(struct HAL_t *hal, const char *msg)
             close(client);
             hal->socket_clients[i] = hal->socket_clients[hal->socket_n_clients-1];
             hal->socket_n_clients--;
+            WARN("Lost event listener");
         }
     }
 }
@@ -175,6 +176,7 @@ static void HAL_socket_accept(struct HAL_t *hal)
     int client = accept(hal->socket_fd, NULL, NULL);
     hal->socket_clients[hal->socket_n_clients] = client;
     hal->socket_n_clients++;
+    INFO("New event listener");
 }
 
 /* Main input routine */
