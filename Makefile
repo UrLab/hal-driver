@@ -17,7 +17,7 @@ version.h: version.h.tpl .git
 
 .PHONY: clean mrproper tests
 clean:
-	rm -f *.o
+	rm -f *.o version.h
 	+make -C tests clean
 
 mrproper:
