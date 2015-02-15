@@ -23,5 +23,6 @@ void print_log(int lvl, const char *fmt, ... )
                now->tm_hour, now->tm_min, now->tm_sec);
         vprintf(fmt, args);
         printf("\n");
+        fflush(stdout);
     }
 }
