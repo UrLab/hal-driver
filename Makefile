@@ -1,7 +1,7 @@
 include Makefile.flags
 
 TARGET = driver
-OBJS = com.o hal.o HALFS.o
+OBJS = com.o hal.o HALFS.o logger.o
 VERSION = $(shell git log | head -1 | cut -d ' ' -f 2)
 
 all: ${TARGET}

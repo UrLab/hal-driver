@@ -24,19 +24,6 @@ struct HALFS_t {
     } ops;
 };
 
-static inline void HALFS_printTree(HALFS *node, int indent){
-    for (int i=0; i<indent; i++){
-        printf("  ");
-    }
-    printf("%s\n", node->name);
-    if (node->first_child){
-        HALFS_printTree(node->first_child, indent+1);
-    }
-    if (node->next_sibling){
-        HALFS_printTree(node->next_sibling, indent);
-    }
-}
-
 HALFS *HALFS_create(const char *name);
 void HALFS_destroy(HALFS *self);
 

@@ -4,6 +4,7 @@
 #include <string.h>
 #include <errno.h>
 #include "hal.h"
+#include "logger.h"
 
 #define streq(s1,s2) (strcmp((s1),(s2)) == 0)
 #define HAL_IDX(cat,name) idx(name, hal->cat, hal->n_##cat)
@@ -11,40 +12,13 @@
 static HAL *hal = NULL;
 static int my_uid, my_gid;
 
-int split_path(const char *path, char parts[5][32])
-{
-    if (*path == '/'){
-        path++;
-    }
-    int i = 0;
-    int j = 0;
-    while (*path != '\0' && i<5){
-        if (*path == '/'){
-            parts[i][j] = '\0';
-            i++;
-            j = 0;
-        } else {
-            parts[i][j] = *path;
-            j++;
-        }
-        path++;
-    }
-    parts[i][j] = '\0';
-    int res = (j == 0) ? i : i+1;
-    for (i=0; i<res; i++){
-        printf("PART[%d]: %s\n", i, parts[i]);
-    }
-    return res;
-}
-
 void *HALFS_init(struct fuse_conn_info *conn)
 {
     hal = HAL_connect();
     if (! hal){
-        fprintf(stderr, "Cannot connect to arduino; quit !\n");
+        HAL_WARN("Cannot connect to arduino; quit !");
         exit(1);
     }
-    HALFS_printTree(hal->root, 0);
     return NULL;
 }
 

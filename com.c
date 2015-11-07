@@ -1,4 +1,5 @@
 #include "com.h"
+#include "logger.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,21 +14,6 @@
 
 static const unsigned char SYNC = 0xff;
 static const unsigned char  ESC = 0xaa;
-
-const char *HALErr_desc(HALErr err)
-{
-    switch (err){
-        case OK:        return "No error";
-        case TIMEOUT:   return "Command timeouted";
-        case SEQERR:    return "No more seq no avialableat the moment";
-        case LOCKERR:   return "Cannot acquire lock on connection";
-        case CHKERR:    return "Checksum error";
-        case READERR:   return "Cannot read";
-        case WRITEERR:  return "Cannot write";
-        case OUTOFSYNC: return "Encountered unexpected SYNC byte; must resync";
-        default: return "Unknown error";
-    }
-}
 
 struct HALConnection {
     /* Arduino FD */
@@ -48,56 +34,7 @@ struct HALConnection {
     /* Stats */
     size_t rx_bytes;
     size_t tx_bytes;
-    unsigned int loglevel;
 };
-
-void HALConn_log(HALConnection *conn, HALLogLvl lvl, const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    if (conn->loglevel >= lvl){
-        vfprintf(stderr, fmt, args);
-        fprintf(stderr, "\n");
-    }
-    va_end(args);
-}
-
-void HALConn_dump(HALConnection *conn, const HALMsg *msg, const char *prefix){
-    if (conn->loglevel >= DUMP){
-        if (prefix){
-            fprintf(stderr, "%s", prefix);
-        }
-
-        fprintf(stderr, 
-            "#%c%-3hhu: command=%02hhx, type=%c%c, rid=%hhu, len=%hhu chk=%d\n", 
-            (IS_ARDUINO_SEQ(msg->seq) ? 'A' : 'D'),
-            ABSOLUTE_SEQ(msg->seq),
-            msg->cmd,
-            MSG_TYPE(msg), MSG_IS_CHANGE(msg) ? '!' : '?',
-            msg->rid,
-            msg->len,
-            msg->chk);
-        
-        for (int i=0; i<16 && 16*i<msg->len; i++){
-            for (int j=0; j<16 && 16*i+j < msg->len; j++){
-                fprintf(stderr, "  %02hhx", msg->data[16*i+j]);
-            }
-            fprintf(stderr, " | ");
-            for (int j=0; j<16 && 16*i+j < msg->len; j++){
-                char c = (msg->data[16*i+j] & 0x80) ? '.' : msg->data[16*i+j];
-                fprintf(stderr, "%c",  c);
-            }
-            fprintf(stderr, "\n");
-        }
-    }
-}
-
-void HALConn_loglevel(HALConnection *conn, HALLogLvl lvl)
-{
-    pthread_mutex_lock(&conn->mutex);
-    conn->loglevel = lvl;
-    pthread_mutex_unlock(&conn->mutex);
-}
 
 static int set_termios_opts(int fd)
 {
@@ -140,20 +77,17 @@ HALConnection *HALConn_open(const char *path)
     int fd = open(path, O_RDWR);
     
     if (fd < 0)  {
-        fprintf(stderr, "Unable to open port [ERRNO %d: %s]\n",
-            errno, strerror(errno));
+        HAL_ERROR(UNKNERR, "Unable to open port [ERRNO %d: %s]", errno, strerror(errno));
         return NULL;
     }
     if (! set_termios_opts(fd)){
         close(fd);
-        fprintf(stderr, "Unable to set serial port options [ERRNO %d: %s]\n",
-            errno, strerror(errno));
+        HAL_ERROR(UNKNERR, "Unable to set serial port options [ERRNO %d: %s]\n", errno, strerror(errno));
         return NULL;
     }
 
     HALConnection *res = calloc(1, sizeof(HALConnection));
     res->fd = fd;
-    res->loglevel = INFO;
     pthread_mutex_init(&res->mutex, NULL);
     for (size_t i=0; i<HALMSG_SEQ_MAX+1; i++){
         pthread_cond_init(res->waits+i, NULL);
@@ -220,7 +154,7 @@ static HALErr HAL_read_byte(HALConnection *conn, unsigned char *the_byte)
     else if (*the_byte == ESC){
         r = wrap_read(conn->fd, the_byte);
         if (r < 0){
-            HAL_WARN(conn, "Error when reading byte [ERRNO %d: %s]",
+            HAL_WARN("Error when reading byte [ERRNO %d: %s]",
                 errno, strerror(errno));
             return READERR;
         }
@@ -253,7 +187,7 @@ HALErr HALConn_write_message(HALConnection *conn, const HALMsg *msg)
         }
     }
 
-    HALConn_dump(conn, msg, " << ");
+    dump_message(msg, " << ");
 
     return OK;
 }
@@ -297,7 +231,7 @@ HALErr HALConn_read_message(HALConnection *conn, HALMsg *msg)
         }
     }
 
-    HALConn_dump(conn, msg, " >> ");
+    dump_message(msg, " >> ");
 
     /* 4. Verify checksum */
     return (HALMsg_checksum(msg) == msg->chk) ? OK : CHKERR;
@@ -373,7 +307,7 @@ static void HALConn_dispatch(HALConnection *conn, HALMsg *msg)
         if (MSG_TYPE(msg) == PING){
             HALConn_write_message(conn, msg);
         } else if (MSG_TYPE(msg) == BOOT){
-            HAL_WARN(conn, "Arduino rebooted");
+            HAL_WARN("Arduino rebooted");
         }
     }
 }
@@ -385,7 +319,7 @@ static void *HALConn_reader_thread(void *arg)
     HALMsg msg;
     struct pollfd polled = {.fd = conn->fd, .events = POLLIN};
 
-    HAL_INFO(conn, "Reader thread started\n");
+    HAL_INFO("Reader thread started\n");
 
     while (1){
         /* Wait for arduino readyness */
@@ -399,7 +333,7 @@ static void *HALConn_reader_thread(void *arg)
             if (r == OK){
                 HALConn_dispatch(conn, &msg);
             } else {
-                printf("Cannot read HAL message: %s (%d)\n", HALErr_desc(r), r);
+                HAL_ERROR(r, "Error while reading message");
             }
             pthread_mutex_unlock(&conn->mutex);
         }

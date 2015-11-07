@@ -1,4 +1,5 @@
 #include "hal.h"
+#include "logger.h"
 #include <stdlib.h>
 #include <string.h>
 #include <glob.h>
@@ -208,7 +209,7 @@ static HALErr HAL_load(HAL *hal)
     msg.chk = HALMsg_checksum(&msg);
     HALErr err = HALConn_write_message(hal->conn, &msg);
     if (err != OK){
-        HAL_ERROR(hal->conn, "Cannot write to arduino: %s", HALErr_desc(err));
+        HAL_ERROR(err, "Unable to ask resource tree");
         return err;
     }
 
@@ -222,7 +223,7 @@ static HALErr HAL_load(HAL *hal)
         do {
             err = HALConn_read_message(hal->conn, &msg);
             if (err != OK){
-                HAL_ERROR(hal->conn, "Cannot read from arduino: %s", HALErr_desc(err));
+                HAL_ERROR(err, "Unable to get resource tree branch");
                 return err;
             }
         } while (MSG_TYPE(&msg) != TREE);
@@ -230,74 +231,71 @@ static HALErr HAL_load(HAL *hal)
         n = msg.rid;
         switch (msg.data[0]){
             case SENSOR:
-                HAL_DEBUG(hal->conn, "Loading %hhu sensors", n);
+                HAL_DEBUG("Loading %hhu sensors", n);
                 file = path + sprintf(path, "/sensors/");
                 for (unsigned char i=0; i<n; i++){
                     err = HALConn_read_message(hal->conn, &msg);
                     if (err != OK){
-                        HAL_ERROR(hal->conn, "Cannot read from arduino: %s",
-                            HALErr_desc(err));
+                        HAL_ERROR(err, "Unable to get sensor %hhu", i);
                         return err;
                     }
                     msg.data[msg.len] = '\0';
                     strcpy(file, (const char *) msg.data);
-                    printf("INSERTING %s\n", path);
                     node = HALFS_insert(hal->root, path);
                     node->ops.mode = 0444;
                     node->ops.read = sensor_read;
                     node->ops.size = 13;
+                    HAL_DEBUG("  Inserted sensor %s", node->name);
                 }
                 break;
             case SWITCH:
-                HAL_DEBUG(hal->conn, "Loading %hhu switchs", n);
+                HAL_DEBUG("Loading %hhu switchs", n);
                 file = path + sprintf(path, "/switchs/");
                 for (unsigned char i=0; i<n; i++){
                     err = HALConn_read_message(hal->conn, &msg);
                     if (err != OK){
-                        HAL_ERROR(hal->conn, "Cannot read from arduino: %s",
-                            HALErr_desc(err));
+                        HAL_ERROR(err, "Unable to get switch %hhu", i);
                         return err;
                     }
                     msg.data[msg.len] = '\0';
                     strcpy(file, (const char *) msg.data);
-                    printf("INSERTING %s\n", path);
                     node = HALFS_insert(hal->root, path);
                     node->ops.mode = 0666;
                     node->ops.write = switch_write;
                     node->ops.read = switch_read;
                     node->ops.size = 2;
+                    HAL_DEBUG("  Inserted switch %s", node->name);
                 }
                 break;
             case ANIMATION_FRAMES:
-                HAL_DEBUG(hal->conn, "Loading %hhu animations", n);
+                HAL_DEBUG("Loading %hhu animations", n);
                 for (unsigned char i=0; i<n; i++){
                     err = HALConn_read_message(hal->conn, &msg);
                     if (err != OK){
-                        HAL_ERROR(hal->conn, "Cannot read from arduino: %s",
-                            HALErr_desc(err));
+                        HAL_ERROR(err, "Unable to get animation %hhu", i);
                         return err;
                     }
                     msg.data[msg.len] = '\0';
                     HAL_insert_animation(hal->root, (const char *) msg.data, msg.rid);
+                    HAL_DEBUG("  Inserted animation %s", (const char*) msg.data);
                 }
                 break;
             case TRIGGER:
-                HAL_DEBUG(hal->conn, "Loading %hhu triggers", n);
+                HAL_DEBUG("Loading %hhu triggers", n);
                 file = path + sprintf(path, "/triggers/");
                 for (unsigned char i=0; i<n; i++){
                     err = HALConn_read_message(hal->conn, &msg);
                     if (err != OK){
-                        HAL_ERROR(hal->conn, "Cannot read from arduino: %s",
-                            HALErr_desc(err));
+                        HAL_ERROR(err, "Unable to get trigger %hhu", i);
                         return err;
                     }
                     msg.data[msg.len] = '\0';
                     strcpy(file, (const char *) msg.data);
-                    printf("INSERTING %s\n", path);
                     node = HALFS_insert(hal->root, path);
                     node->ops.mode = 0444;
                     node->ops.read = trigger_read;
                     node->ops.size = 2;
+                    HAL_DEBUG("  Inserted trigger %s", node->name);
                 }
                 break;
         }
@@ -320,22 +318,21 @@ HAL *HAL_connect()
         }
         glob(ARDUINO_DEV_PATH[i], flag, NULL, &globbuf);
     }
-    printf("Found %lu possible arduinos in /dev/\n",
-        (long unsigned int) globbuf.gl_pathc);
+    HAL_INFO("Found %lu possible arduinos in /dev/", (long unsigned int) globbuf.gl_pathc);
+    
     for (size_t i = 0; i < globbuf.gl_pathc; i++){
-        printf("Trying %s\n", globbuf.gl_pathv[i]);
+        HAL_DEBUG("Trying %s", globbuf.gl_pathv[i]);
         conn = HALConn_open(globbuf.gl_pathv[i]);
-        HALConn_loglevel(conn, DUMP);
         sleep(2);
 
         if (! conn){
-            printf("Skip %s\n", globbuf.gl_pathv[i]);
+            HAL_WARN("Skip %s", globbuf.gl_pathv[i]);
         } else {
             res = calloc(1, sizeof(HAL));
             res->conn = conn;
             res->root = HALFS_create("/");
             if (HAL_load(res) == OK){
-                printf("Connected !\n");
+                HAL_INFO("Connected to %s !", globbuf.gl_pathv[i]);
                 HALConn_run_reader(conn);
             } else {
                 free(res);

@@ -22,32 +22,7 @@ typedef enum HALErr {
     UNKNERR   = 8  //!< Unknown error
 } HALErr;
 
-typedef enum HALLogLvl {
-    SILENT  = 0, //!< No logging at all
-    ERROR   = 1, //!< Errors only
-    WARNING = 2, //!< Errors and warnings
-    INFO    = 3, //!< Errors, warnings and informations
-    DEBUG   = 4, //!< Log everything
-    DUMP    = 5  //!< Log everything and dump HAL serial traffic 
-} HALLogLvl;
-
-const char *HALErr_desc(HALErr err);
-
 HALConnection *HALConn_open(const char *path);
-
-#define HAL_ERROR(conn,fmt,...) HALConn_log(conn, ERROR, fmt, ##__VA_ARGS__)
-#define HAL_WARN(conn,fmt,...) HALConn_log(conn, WARNING, fmt, ##__VA_ARGS__)
-#define HAL_INFO(conn,fmt,...) HALConn_log(conn, INFO, fmt, ##__VA_ARGS__)
-#define HAL_DEBUG(conn,fmt,...) HALConn_log(conn, DEBUG, fmt, ##__VA_ARGS__)
-void HALConn_log(HALConnection *conn, HALLogLvl lvl, const char *fmt, ...);
-
-void HALConn_dump(HALConnection *conn, const HALMsg *msg, const char *prefix);
-
-/*!
- *  Set the loglevel
- */
-void HALConn_loglevel(HALConnection *conn, HALLogLvl lvl);
-
 
 /*!
  *  Close connection to Arduino
