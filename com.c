@@ -205,10 +205,8 @@ static inline int wrap_read(int fd, unsigned char *dest)
 /* Read a (potentially escaped) single byte */
 static HALErr HAL_read_byte(HALConnection *conn, unsigned char *the_byte)
 {
-    HALErr r;
-
     /* Read byte */
-    r = wrap_read(conn->fd, the_byte);
+    int r = wrap_read(conn->fd, the_byte);
     if (r < 0){
         return READERR;
     }
