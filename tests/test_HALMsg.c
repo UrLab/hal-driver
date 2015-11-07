@@ -6,8 +6,8 @@ TEST(checksum, {
     memset(&msg, 0, sizeof(msg));
 
     msg.cmd = VERSION;
-    ASSERT(CMD(&msg, VERSION));
-    ASSERT(! IS_CHANGE(&msg));
+    ASSERT(MSG_TYPE(&msg) == VERSION);
+    ASSERT(! MSG_IS_CHANGE(&msg));
     ASSERT(HALMsg_checksum(&msg) == VERSION);
 
     msg.data[0] = 1;
@@ -18,5 +18,4 @@ TEST(checksum, {
 })
 
 SUITE(
-    ADDTEST(checksum)
-)
+    ADDTEST(checksum))

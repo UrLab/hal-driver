@@ -1,12 +1,11 @@
 #ifndef DEFINE_HALMSG_HEADER
 #define DEFINE_HALMSG_HEADER
 
-#include "HALResource.h"
 #include <stdio.h>
 
 typedef enum {
     BOOT='#',
-    HAL_PING='*',
+    PING='*',
     VERSION='?',
     TREE='$',
 
@@ -23,44 +22,35 @@ typedef enum {
 } HALCommand;
 
 typedef struct HALMsg_t {
-    unsigned char cmd; //!< Hal command
-    unsigned char rid; //!< Resource id
-    unsigned char len; //!< Data len
-    unsigned char chk; //!< Checksum
-    unsigned char data[255]; //!< Command data, if any
+    unsigned char chk;        //!< Checksum
+    unsigned char seq;        //!< Sequence id of the message
+    unsigned char cmd;        //!< Hal command
+    unsigned char rid;        //!< Resource id
+    unsigned char len;        //!< Data len
+    unsigned char data[255];  //!< Command data, if any
 } HALMsg;
 
+#define HALMSG_SEQ_MAX 0x7f
+#define ABSOLUTE_SEQ(x) ((x) & 0x7f)
+#define DRIVER_SEQ(x) ABSOLUTE_SEQ(x)
+#define ARDUINO_SEQ(x) (0x80 | ABSOLUTE_SEQ(x))
+#define IS_DRIVER_SEQ(x) ((x & 0x80) == 0x00)
+#define IS_ARDUINO_SEQ(x) ((x & 0x80) == 0x80)
 
-unsigned char HALMsg_checksum(HALMsg *msg);
+#define MSG_TYPE(msg) (((msg)->cmd) & 0x7f)
+#define MSG_IS_CHANGE(msg) (((msg)->cmd) & 0x80)
 
-/* Compute checksum and write message to HAL. */
-void HALMsg_write(HAL_t *hal, HALMsg *msg);
-
-/* Read a message from serial link */
-void HALMsg_read(HAL_t *hal, HALMsg *res);
-
-/* Wait for cmd, then read a message of this type from serial link. */
-void HALMsg_read_command(HAL_t *hal, HALMsg *res, unsigned char cmd);
-
-static inline void RESET(HALMsg *msg){memset(msg, 0, sizeof(HALMsg));}
-static inline void DESCRIBE(HALMsg *msg)
+static inline unsigned char HALMsg_checksum(HALMsg *msg)
 {
-    printf("%c %hhu [%hhu] <%hhu>", msg->cmd, msg->rid, msg->len, msg->chk);
-}
+    unsigned char res = 0;
 
-static inline bool CMD(HALMsg *msg, HALCommand type)
-{
-    return (msg->cmd & ~PARAM_CHANGE) == type;
-}
+    /* Sum of bytes above chk */
+    unsigned char *bytes = (unsigned char *) msg + 1;
+    for (unsigned char i=0; i<msg->len+4; i++){
+        res += bytes[i];
+    }
 
-static inline bool IS_CHANGE(HALMsg *msg)
-{
-    return (msg->cmd & PARAM_CHANGE) == PARAM_CHANGE;
-}
-
-static inline bool IS_VALID(HALMsg *msg)
-{
-    return (msg)->chk == HALMsg_checksum(msg);
+    return res;
 }
 
 #endif

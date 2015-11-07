@@ -1,10 +1,10 @@
 #ifndef DEFINE_DIRTREE_HEADER
 #define DEFINE_DIRTREE_HEADER
 
-#include "HALResource.h"
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fuse.h>
+#include "com.h"
 
 extern struct fuse_operations HALFS_ops;
 
@@ -13,16 +13,29 @@ typedef struct HALFS_t HALFS;
 struct HALFS_t {
 	const char *name;
 	HALFS *first_child, *next_sibling;
-    HALResource *backend;
+    unsigned char id;
     struct {
         char * target; /* Target for symlinks */
         int mode; /* File mode */
-        int (* size)(HALResource *); /* File size */
-        int (* trunc)(HALResource *); /* File truncate */
-        int (* read)(HALResource *, char *, size_t, off_t); /* File read */
-        int (* write)(HALResource *, const char *, size_t, off_t); /* File write */
+        size_t size;
+        int (* trunc)(HALConnection *, unsigned char); /* File truncate */
+        int (* read)(HALConnection *, unsigned char, char *, size_t, off_t); /* File read */
+        int (* write)(HALConnection *, unsigned char, const char *, size_t, off_t); /* File write */
     } ops;
 };
+
+static inline void HALFS_printTree(HALFS *node, int indent){
+    for (int i=0; i<indent; i++){
+        printf("  ");
+    }
+    printf("%s\n", node->name);
+    if (node->first_child){
+        HALFS_printTree(node->first_child, indent+1);
+    }
+    if (node->next_sibling){
+        HALFS_printTree(node->next_sibling, indent);
+    }
+}
 
 HALFS *HALFS_create(const char *name);
 void HALFS_destroy(HALFS *self);

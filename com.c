@@ -1,474 +1,416 @@
-#include <unistd.h>
+#include "com.h"
 #include <stdio.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <sys/select.h>
-#include <sys/time.h>
-#include <sys/stat.h>
-#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <time.h>
+#include <errno.h>
+#include <poll.h>
+#include <termios.h>
+#include <sys/fcntl.h>
 
-#include "arduino-serial-lib.h"
-#include "HALResource.h"
-#include "HALMsg.h"
-#include "utils.h"
-#include "logger.h"
+static const unsigned char SYNC = 0xff;
+static const unsigned char  ESC = 0xaa;
 
-#define HAL_LOCK(r) pthread_mutex_lock(&((r)->hal->mutex))
-#define HAL_UNLOCK(r) pthread_mutex_unlock(&((r)->hal->mutex))
-
-static const struct timespec HAL_req_timeout = {.tv_sec=0, .tv_nsec=500000000};
-
-static inline int wait_timeout(struct timespec *timeout)
+const char *HALErr_desc(HALErr err)
 {
-    int res = clock_gettime(CLOCK_REALTIME, timeout);
-    if (res != 0)
-        return res;
-
-    unsigned long int nsecs = timeout->tv_nsec + HAL_req_timeout.tv_nsec;
-    if (nsecs > 1000000000l)
-        timeout->tv_sec++;
-    timeout->tv_nsec = nsecs % 1000000000l;
-    return 0;
+    switch (err){
+        case OK:        return "No error";
+        case TIMEOUT:   return "Command timeouted";
+        case SEQERR:    return "No more seq no avialableat the moment";
+        case LOCKERR:   return "Cannot acquire lock on connection";
+        case CHKERR:    return "Checksum error";
+        case READERR:   return "Cannot read";
+        case WRITEERR:  return "Cannot write";
+        case OUTOFSYNC: return "Encountered unexpected SYNC byte; must resync";
+        default: return "Unknown error";
+    }
 }
 
-static inline int HAL_SIGNAL(HALResource *r)
+struct HALConnection {
+    /* Arduino FD */
+    int fd;
+
+    /* Current emit seq number */
+    unsigned int current_seq;
+
+    /* Multithreading for the reader */
+    pthread_mutex_t mutex;
+    pthread_t reader_thread;
+
+    /* A table containing pending requests, indexed by seq number */
+    pthread_cond_t  waits[HALMSG_SEQ_MAX+1];
+    unsigned char    used[HALMSG_SEQ_MAX+1];
+    HALMsg      responses[HALMSG_SEQ_MAX+1];
+
+    /* Stats */
+    size_t rx_bytes;
+    size_t tx_bytes;
+    unsigned int loglevel;
+};
+
+void HALConn_log(HALConnection *conn, HALLogLvl lvl, const char *fmt, ...)
 {
-    DEBUG("SIGNAL %s", (r)->name);
-    return pthread_cond_signal(&(r)->cond);
+    va_list args;
+    va_start(args, fmt);
+    if (conn->loglevel >= lvl){
+        vfprintf(stderr, fmt, args);
+        fprintf(stderr, "\n");
+    }
+    va_end(args);
 }
 
-static inline int HAL_WAIT(HALResource *r)
-{
-    struct timespec until;
-    wait_timeout(&until);
+void HALConn_dump(HALConnection *conn, const HALMsg *msg, const char *prefix){
+    if (conn->loglevel >= DUMP){
+        if (prefix){
+            fprintf(stderr, "%s", prefix);
+        }
 
-    DEBUG("WAIT %s (until %ds %dns)", r->name, (int) until.tv_sec, (int) until.tv_nsec);
-    int res = pthread_cond_timedwait(&(r->cond), &(r->hal->mutex), &until);
-    if (res == ETIMEDOUT)
-        WARN("WAIT TIMEOUT %s", r->name);
+        fprintf(stderr, 
+            "#%c%-3hhu: command=%02hhx, type=%c%c, rid=%hhu, len=%hhu chk=%d\n", 
+            (IS_ARDUINO_SEQ(msg->seq) ? 'A' : 'D'),
+            ABSOLUTE_SEQ(msg->seq),
+            msg->cmd,
+            MSG_TYPE(msg), MSG_IS_CHANGE(msg) ? '!' : '?',
+            msg->rid,
+            msg->len,
+            msg->chk);
+        
+        for (int i=0; i<16 && 16*i<msg->len; i++){
+            for (int j=0; j<16 && 16*i+j < msg->len; j++){
+                fprintf(stderr, "  %02hhx", msg->data[16*i+j]);
+            }
+            fprintf(stderr, " | ");
+            for (int j=0; j<16 && 16*i+j < msg->len; j++){
+                char c = (msg->data[16*i+j] & 0x80) ? '.' : msg->data[16*i+j];
+                fprintf(stderr, "%c",  c);
+            }
+            fprintf(stderr, "\n");
+        }
+    }
+}
+
+void HALConn_loglevel(HALConnection *conn, HALLogLvl lvl)
+{
+    pthread_mutex_lock(&conn->mutex);
+    conn->loglevel = lvl;
+    pthread_mutex_unlock(&conn->mutex);
+}
+
+static int set_termios_opts(int fd)
+{
+    struct termios toptions;
+
+    if (tcgetattr(fd, &toptions) < 0) {
+        return 0;
+    }
+
+    speed_t brate = B115200; // let you override switch below if needed
+    cfsetispeed(&toptions, brate);
+    cfsetospeed(&toptions, brate);
+
+    // 8N1
+    toptions.c_cflag &= ~PARENB;
+    toptions.c_cflag &= ~CSTOPB;
+    toptions.c_cflag &= ~CSIZE;
+    toptions.c_cflag |= CS8;
+    
+    toptions.c_cflag |= CREAD | CLOCAL;  // turn on READ & ignore ctrl lines
+    toptions.c_iflag &= ~(IXON | IXOFF | IXANY); // turn off s/w flow ctrl
+
+    toptions.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG); // make raw
+    toptions.c_oflag &= ~OPOST; // make raw
+
+    // see: http://unixwiz.net/techtips/termios-vmin-vtime.html
+    toptions.c_cc[VMIN]  = 0;
+    toptions.c_cc[VTIME] = 0;
+    
+    tcsetattr(fd, TCSANOW, &toptions);
+    if(tcsetattr(fd, TCSAFLUSH, &toptions) < 0) {
+        return 0;
+    }
+
+    return 1;
+}
+
+HALConnection *HALConn_open(const char *path)
+{
+    int fd = open(path, O_RDWR);
+    
+    if (fd < 0)  {
+        fprintf(stderr, "Unable to open port [ERRNO %d: %s]\n",
+            errno, strerror(errno));
+        return NULL;
+    }
+    if (! set_termios_opts(fd)){
+        close(fd);
+        fprintf(stderr, "Unable to set serial port options [ERRNO %d: %s]\n",
+            errno, strerror(errno));
+        return NULL;
+    }
+
+    HALConnection *res = calloc(1, sizeof(HALConnection));
+    res->fd = fd;
+    res->loglevel = INFO;
+    pthread_mutex_init(&res->mutex, NULL);
+    for (size_t i=0; i<HALMSG_SEQ_MAX+1; i++){
+        pthread_cond_init(res->waits+i, NULL);
+    }
+
     return res;
 }
 
-/* Establish communication with arduino && initialize HAL structure */
-bool HAL_init(struct HAL_t *hal, const char *arduino_dev)
+void HALConn_close(HALConnection *conn)
 {
-    memset(hal, 0, sizeof(struct HAL_t));
-    hal->serial_fd = serialport_init(arduino_dev, 115200);
-    if (hal->serial_fd < 0){
-        ERROR("Unable to open serial port %s", arduino_dev);
-        return false;
-    }
-
-    sleep(1);
-
-    HALMsg msg;
-    RESET(&msg);
-    HALMsg_read_command(hal, &msg, BOOT);
-
-    msg.cmd = VERSION;
-    HALMsg_write(hal, &msg);
-
-    do {HALMsg_read(hal, &msg);} while (! CMD(&msg, VERSION));
-
-    if (msg.len < 40){
-        ERROR("Invalid Arduino version");
-        goto fail;
-    }
-    memcpy(hal->version, msg.data, 40);
-    INFO("Arduino version: %40s", msg.data);
-
-    RESET(&msg);
-    msg.cmd = TREE;
-    HALMsg_write(hal, &msg);
-
-    for (int i=0; i<4; i++){
-        do HALMsg_read(hal, &msg); while (! CMD(&msg, TREE));
-        if (! IS_VALID(&msg)){
-            ERROR("Invalid message received (bad checksum)");
-            goto fail;
-        }
-
-        size_t N = msg.rid;
-        HALResource *res = calloc(N, sizeof(HALResource));
-        if (! res){
-            ERROR("Memory allocation error");
-            goto fail;
-        }
-
-        if (msg.data[0] == SENSOR){hal->n_sensors = N; hal->sensors = res;}
-        else if (msg.data[0] == TRIGGER){hal->n_triggers = N; hal->triggers = res;}
-        else if (msg.data[0] == SWITCH){hal->n_switchs = N; hal->switchs = res;}
-        else if (msg.data[0] == ANIMATION_FRAMES){hal->n_animations = N; hal->animations = res;}
-        else goto fail;
-        INFO("Loading %lu resources of type %c",N, msg.data[0]);
-
-        for (size_t j=0; j<N; j++){
-            HALMsg_read(hal, &msg);
-            if (! IS_VALID(&msg)){
-                ERROR("Invalid message received (bad checksum)");
-                goto fail;
-            }
-            msg.data[msg.len] = '\0';
-            HALResource_init(res+j, (const char *) msg.data, j, hal);
-            INFO("    Loaded [%lu] %s", j, res[j].name);
-        }
-    }
-
-    pthread_mutex_init(&hal->mutex, NULL);
-    hal->ready = true;
-    INFO("Ready !");
-    return true;
-
-    fail:
-        close(hal->serial_fd);
-        if (hal->n_sensors) HALResource_destroyAll(&hal->n_sensors, hal->sensors);
-        if (hal->n_triggers) HALResource_destroyAll(&hal->n_triggers, hal->triggers);
-        if (hal->n_switchs) HALResource_destroyAll(&hal->n_switchs, hal->switchs);
-        if (hal->n_animations) HALResource_destroyAll(&hal->n_animations, hal->animations);
-        memset(hal, 0, sizeof(struct HAL_t));
-    return false;
+    close(conn->fd);
+    free(conn);
 }
 
-/* Create && bind HAL events socket */
-void HAL_socket_open(struct HAL_t *hal, const char *path)
+/* Write a single byte, escaping ESC and SYNC */
+static HALErr HAL_write_byte(HALConnection *conn, unsigned char the_byte)
 {
-    size_t len;
-    struct sockaddr_un sock_desc;
-    hal->socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    HALErr r;
 
-    sock_desc.sun_family = AF_UNIX;
-    strcpy(sock_desc.sun_path, path);
-    unlink(sock_desc.sun_path);
-    
-    len = strlen(sock_desc.sun_path) + sizeof(sock_desc.sun_family);
-    bind(hal->socket_fd, (struct sockaddr *)&sock_desc, len);
-    listen(hal->socket_fd, HAL_SOCK_MAXCLIENTS);
-    chmod(sock_desc.sun_path, 0777);
+    /* Escape special bytes */
+    if (the_byte == SYNC || the_byte == ESC){
+        r = write(conn->fd, &ESC, 1);
+        if (r != 1){
+            return WRITEERR;
+        }
+        conn->tx_bytes++;
+    }
+
+    /* Write the byte itself */
+    r = write(conn->fd, &the_byte, 1);
+    if (r != 1){
+        return WRITEERR;
+    }
+    conn->tx_bytes++;
+    return OK;
 }
 
-/* Writes msg to every clients of HAL events socket */
-static void HAL_socket_write(struct HAL_t *hal, const char *msg)
+static const struct timespec read_sleep = {.tv_sec=0, .tv_nsec=10000};
+static inline int wrap_read(int fd, unsigned char *dest)
 {
-    int len = (int) strlen(msg);
-    for (int i=0; i<hal->socket_n_clients; i++){
-        int client = hal->socket_clients[i];
-        if (write(client, msg, len) != len){
-            close(client);
-            hal->socket_clients[i] = hal->socket_clients[hal->socket_n_clients-1];
-            hal->socket_n_clients--;
-            WARN("Lost event listener");
+    int r = read(fd, dest, 1);
+    while (r == 0){
+        nanosleep(&read_sleep, NULL);
+        r = read(fd, dest, 1);
+    }
+    return r;
+}
+
+/* Read a (potentially escaped) single byte */
+static HALErr HAL_read_byte(HALConnection *conn, unsigned char *the_byte)
+{
+    HALErr r;
+
+    /* Read byte */
+    r = wrap_read(conn->fd, the_byte);
+    if (r < 0){
+        return READERR;
+    }
+    conn->rx_bytes++;
+
+    if (*the_byte == SYNC){
+        return OUTOFSYNC;
+    }
+
+    /* If it was escaped read 1 more byte */
+    else if (*the_byte == ESC){
+        r = wrap_read(conn->fd, the_byte);
+        if (r < 0){
+            HAL_WARN(conn, "Error when reading byte [ERRNO %d: %s]",
+                errno, strerror(errno));
+            return READERR;
+        }
+        conn->rx_bytes++;
+    }
+
+    return OK;
+}
+
+/* Write a full message */
+HALErr HALConn_write_message(HALConnection *conn, const HALMsg *msg)
+{
+    const unsigned char *bytes = (const unsigned char *) msg;
+    HALErr r = 0;
+
+    /* Write 3 SYNCs bytes (prelude) */
+    for (int i=0; i<3; i++){
+        r = write(conn->fd, &SYNC, 1);
+        if (r != 1){
+            return WRITEERR;
+        }
+        conn->tx_bytes++;
+    }
+
+    /* Write message itself */
+    for (int i=0; i<5+msg->len; i++){
+        r = HAL_write_byte(conn, bytes[i]);
+        if (r != OK){
+            return r;
         }
     }
+
+    HALConn_dump(conn, msg, " << ");
+
+    return OK;
 }
 
-/* Accept new client on HAL events socket; timeouts in 1ms */
-static void HAL_socket_accept(struct HAL_t *hal)
+/* Read a full message */
+HALErr HALConn_read_message(HALConnection *conn, HALMsg *msg)
 {
-    fd_set set;
-    struct timeval timeout = {.tv_sec = 0, .tv_usec = 1000};
-    FD_SET(hal->socket_fd, &set);
-    select(hal->socket_fd+1, &set, NULL, NULL, &timeout);
-    if (! FD_ISSET(hal->socket_fd, &set))
-        return;
+    int sync_count = 0;
+    unsigned char c;
+    int r;
 
-    int client = accept(hal->socket_fd, NULL, NULL);
-    hal->socket_clients[hal->socket_n_clients] = client;
-    hal->socket_n_clients++;
-    INFO("New event listener");
+    /* 1. Find 3 consecutive SYNC */
+    while (sync_count != 3){
+        r = wrap_read(conn->fd, &c);
+        if (r < 0){
+            return READERR;
+        }
+        conn->rx_bytes++;
+
+        if (c == SYNC){
+            sync_count ++;
+        } else {
+            sync_count = 0;
+        }
+    }
+
+    /* 2. Read message header */
+    unsigned char *bytes = (unsigned char *)msg;
+    for (int i=0; i<5; i++){
+        r = HAL_read_byte(conn, bytes+i);
+        if (r != OK){
+            return r;
+        }
+    }
+
+    /* 3. Read body */
+    for (int i=0; i<msg->len; i++){
+        r = HAL_read_byte(conn, msg->data+i);
+        if (r != OK){
+            return r;
+        }
+    }
+
+    HALConn_dump(conn, msg, " >> ");
+
+    /* 4. Verify checksum */
+    return (HALMsg_checksum(msg) == msg->chk) ? OK : CHKERR;
 }
 
-/* Main input routine */
-void *HAL_read_thread(void *args)
+HALErr HALConn_request(HALConnection *conn, HALMsg *msg)
 {
-    struct HAL_t *hal = (struct HAL_t *) args;
-    HALMsg msg;
-    HALResource *res;
+    HALErr retval;
 
-    while (true){
-        res = NULL;
-        HAL_socket_accept(hal);
+    /* Acquire lock on connection */
+    int r = pthread_mutex_lock(&conn->mutex);
+    if (r != 0){
+        return LOCKERR;
+    }
 
-        HALMsg_read(hal, &msg);
-        if (! IS_VALID(&msg)){
-            WARN("Invalid message (bad checksum); drop");
-            continue;
-        }
+    /* Acquire next SEQ no */
+    unsigned char seq = DRIVER_SEQ(conn->current_seq + 1);
+    if (conn->used[ABSOLUTE_SEQ(seq)]){
+        retval = SEQERR;
+    }
+    else {
+        /* Attribute SEQ no and emit message */
+        conn->used[ABSOLUTE_SEQ(seq)] = 1;
+        msg->seq = conn->current_seq = seq;
+        /* Compute and store checksum in msg */
+        msg->chk = HALMsg_checksum(msg);
 
-        pthread_mutex_lock(&hal->mutex);
-        hal->rx_bytes += msg.len + 4;
-        pthread_mutex_unlock(&hal->mutex);
-
-        if (CMD(&msg, HAL_PING)){
-            RESET(&msg);
-            msg.cmd = HAL_PING;
-            pthread_mutex_lock(&hal->mutex);
-            HALMsg_write(hal, &msg);
-            pthread_mutex_unlock(&hal->mutex);
-        }
-        else if (CMD(&msg, SENSOR)){
-            if ((msg.rid) >= hal->n_sensors)
-                continue;
-            res = hal->sensors + msg.rid;
-            float val = (((msg.data[0])<<8) | (msg.data[1])); // MSB first
-            val /= 1023;
-
-            HAL_LOCK(res);
-            res->data.f = val;
-            HAL_SIGNAL(res);
-            HAL_UNLOCK(res);
-        } 
-        else if (CMD(&msg, TRIGGER)){
-            if ((msg.rid) >= hal->n_triggers)
-                continue;
-            res = hal->triggers + msg.rid;
-
-            HAL_LOCK(res);
-            if (IS_CHANGE(&msg)){
-                char buf[32];
-                snprintf(buf, 20, "%s:%hhu\n", res->name, msg.data[0]);
-                HAL_socket_write(hal, buf);
-            }
-            res->data.b = msg.data[0] != 0;
-            HAL_SIGNAL(res);
-            HAL_UNLOCK(res);
-        }
-        else if (CMD(&msg, SWITCH)){
-            if ((msg.rid) >= hal->n_switchs)
-                continue;
-            res = hal->switchs + msg.rid;
-
-            HAL_LOCK(res);
-            res->data.b = msg.data[0] != 0;
-            HAL_SIGNAL(res);
-            HAL_UNLOCK(res);
+        r = HALConn_write_message(conn, msg);
+        if (r != OK){
+            retval = r;
         }
         else {
-            // Asume it's an animation for now (will be discarded later if not)
-            if (msg.rid >= hal->n_animations)
-                continue;
-            res = hal->animations + msg.rid;
+            /* Set timeout in 500ms */
+            struct timespec timeout;
+            clock_gettime(CLOCK_REALTIME, &timeout);
+            unsigned long int nsecs = timeout.tv_nsec + 500000000;
+            if (nsecs > 1000000000l){
+                timeout.tv_sec++;
+            }
+            timeout.tv_nsec = nsecs % 1000000000l;
 
-            if (CMD(&msg, ANIMATION_PLAY)){
-                HAL_LOCK(res);
-                res->data.hhu4[1] = msg.data[0] != 0;
-                HAL_SIGNAL(res);
-                HAL_UNLOCK(res);
+            /* Wait for response */
+            r = pthread_cond_timedwait(conn->waits+seq, &conn->mutex, &timeout);
+            if (r == ETIMEDOUT){
+                retval = TIMEOUT;
             }
-            else if (CMD(&msg, ANIMATION_LOOP)){
-                HAL_LOCK(res);
-                res->data.hhu4[0] = msg.data[0] != 0;
-                HAL_SIGNAL(res);
-                HAL_UNLOCK(res);
+            else if (r != 0){
+                retval = UNKNERR;
             }
-            else if (CMD(&msg, ANIMATION_DELAY)){
-                HAL_LOCK(res);
-                res->data.hhu4[2] = msg.data[0];
-                if (res->data.hhu4[2] == 0)
-                    res->data.hhu4[2] = 1; // Avoid zero-div error
-                HAL_SIGNAL(res);
-                HAL_UNLOCK(res);
+            else {
+                memcpy(msg, conn->responses+seq, sizeof(HALMsg));
+                retval = OK;
             }
-            else if (CMD(&msg, ANIMATION_FRAMES)){
-                HAL_LOCK(res);
-                HAL_SIGNAL(res);
-                HAL_UNLOCK(res);
+        }
+
+        /* Mark as unused */
+        conn->used[ABSOLUTE_SEQ(seq)] = 0;
+    }
+
+    /* Release lock; we're done */
+    pthread_mutex_unlock(&conn->mutex);
+    return retval;
+}
+
+static void HALConn_dispatch(HALConnection *conn, HALMsg *msg)
+{
+    if (IS_DRIVER_SEQ(msg->seq)){
+        size_t i = ABSOLUTE_SEQ(msg->seq);
+        memcpy(conn->responses+i, msg, sizeof(HALMsg));
+        pthread_cond_signal(conn->waits+i);
+    }
+    else {
+        if (MSG_TYPE(msg) == PING){
+            HALConn_write_message(conn, msg);
+        } else if (MSG_TYPE(msg) == BOOT){
+            HAL_WARN(conn, "Arduino rebooted");
+        }
+    }
+}
+
+static void *HALConn_reader_thread(void *arg)
+{
+    HALConnection *conn = (HALConnection *) arg;
+    int r = 0;
+    HALMsg msg;
+    struct pollfd polled = {.fd = conn->fd, .events = POLLIN};
+
+    HAL_INFO(conn, "Reader thread started\n");
+
+    while (1){
+        /* Wait for arduino readyness */
+        do {r = poll(&polled, 1, 1000);}
+        while (r != 1);
+
+        /* Acquire lock and read message */
+        r = pthread_mutex_lock(&conn->mutex);
+        if (r == 0){
+            r = HALConn_read_message(conn, &msg);
+            if (r == OK){
+                HALConn_dispatch(conn, &msg);
+            } else {
+                printf("Cannot read HAL message: %s (%d)\n", HALErr_desc(r), r);
             }
+            pthread_mutex_unlock(&conn->mutex);
         }
     }
 
     return NULL;
 }
 
-int HAL_ask_trigger(HALResource *trigger, bool *res)
+int HALConn_run_reader(HALConnection *conn)
 {
-    int ret = 0;
-    HALMsg req = {.cmd=(PARAM_ASK|TRIGGER), .rid=trigger->id, .len=0};
-
-    HAL_LOCK(trigger);
-    HALMsg_write(trigger->hal, &req);
-    if (HAL_WAIT(trigger) != 0)
-        ret = -EAGAIN;
-    else
-        *res = trigger->data.b;
-    HAL_UNLOCK(trigger);
-
-    return ret;
-}
-
-int HAL_set_switch(HALResource *sw, bool on)
-{
-    int ret = 0;
-    HALMsg req = {.cmd=(PARAM_CHANGE|SWITCH), .rid=sw->id, .len=1};
-    req.data[0] = on ? 1 : 0;
-
-    HAL_LOCK(sw);
-    HALMsg_write(sw->hal, &req);
-    if (HAL_WAIT(sw) != 0)
-        ret = -EAGAIN;
-    HAL_UNLOCK(sw);
-
-    return ret;
-}
-
-int HAL_ask_switch(HALResource *sw, bool *res)
-{
-    int ret = 0;
-    HALMsg req = {.cmd=(PARAM_ASK|SWITCH), .rid=sw->id, .len=0};
-
-    HAL_LOCK(sw);
-    HALMsg_write(sw->hal, &req);
-    if (HAL_WAIT(sw) != 0)
-        ret = -EAGAIN;
-    else
-        *res = sw->data.b;
-    HAL_UNLOCK(sw);
-    
-    return ret;
-}
-
-int HAL_upload_anim(
-    HALResource *anim, 
-    unsigned char len, 
-    const unsigned char *frames
-){
-    int ret = 0;
-    HALMsg req = {.cmd=(PARAM_CHANGE|ANIMATION_FRAMES), .rid=anim->id, .len=len};
-    memcpy(req.data, frames, len);
-
-    HAL_LOCK(anim);
-    HALMsg_write(anim->hal, &req);
-    if (HAL_WAIT(anim) != 0)
-        ret = -EAGAIN;
-    HAL_UNLOCK(anim);
-
-    return ret;
-}
-
-int HAL_ask_anim_play(HALResource *anim, bool *res)
-{
-    int ret = 0;
-    HALMsg req = {.cmd=(PARAM_ASK|ANIMATION_PLAY), .rid=anim->id, .len=0};
-
-    HAL_LOCK(anim);
-    HALMsg_write(anim->hal, &req);
-    if (HAL_WAIT(anim) != 0)
-        ret = -EAGAIN;
-    else
-        *res = anim->data.hhu4[1] ? true : false;
-    HAL_UNLOCK(anim);
-
-    return ret;
-}
-
-int HAL_set_anim_play(HALResource *anim, bool play)
-{
-    int ret = 0;
-    HALMsg req = {.cmd=(PARAM_CHANGE|ANIMATION_PLAY), .rid=anim->id, .len=1};
-    req.data[0] = play ? 1 : 0;
-
-    HAL_LOCK(anim);
-    HALMsg_write(anim->hal, &req);
-    if (HAL_WAIT(anim) != 0)
-        ret = -EAGAIN;
-    HAL_UNLOCK(anim);
-
-    return ret;
-}
-
-int HAL_ask_anim_loop(HALResource *anim, bool *res)
-{
-    int ret = 0;
-    HALMsg req = {.cmd=(PARAM_ASK|ANIMATION_LOOP), .rid=anim->id, .len=0};
-
-    HAL_LOCK(anim);
-    HALMsg_write(anim->hal, &req);
-    if (HAL_WAIT(anim) != 0)
-        ret = -EAGAIN;
-    else
-        *res = anim->data.hhu4[0] ? true : false;
-    HAL_UNLOCK(anim);
-
-    return ret;
-}
-
-int HAL_set_anim_loop(HALResource *anim, bool loop)
-{
-    int ret = 0;
-    HALMsg req = {.cmd=(PARAM_CHANGE|ANIMATION_LOOP), .rid=anim->id, .len=1};
-    req.data[0] = loop ? 1 : 0;
-
-    HAL_LOCK(anim);
-    HALMsg_write(anim->hal, &req);
-    if (HAL_WAIT(anim) != 0)
-        ret = -EAGAIN;
-    HAL_UNLOCK(anim);
-
-    return ret;
-}
-
-int HAL_ask_anim_delay(HALResource *anim, unsigned char *res)
-{
-    int ret = 0;
-    HALMsg req = {.cmd=(PARAM_ASK|ANIMATION_DELAY), .rid=anim->id, .len=0};
-
-    HAL_LOCK(anim);
-    HALMsg_write(anim->hal, &req);
-    if (HAL_WAIT(anim) != 0)
-        ret = -EAGAIN;
-    else
-        *res = anim->data.hhu4[2];
-    HAL_UNLOCK(anim);
-    
-    return ret;
-}
-
-int HAL_set_anim_delay(HALResource *anim, unsigned char delay)
-{
-    int ret = 0;
-    HALMsg req = {.cmd=(PARAM_CHANGE|ANIMATION_DELAY), .rid=anim->id, .len=1};
-    req.data[0] = delay;
-
-    HAL_LOCK(anim);
-    HALMsg_write(anim->hal, &req);
-    if (HAL_WAIT(anim) != 0)
-        ret = -EAGAIN;
-    HAL_UNLOCK(anim);
-
-    return ret;
-}
-
-int HAL_ask_sensor(HALResource *sensor, float *res)
-{
-    int ret = 0;
-    HALMsg req = {.cmd=(PARAM_ASK|SENSOR), .rid=sensor->id, .len=0};
-
-    HAL_LOCK(sensor);
-    HALMsg_write(sensor->hal, &req);
-    if (HAL_WAIT(sensor) != 0)
-        ret = -EAGAIN;
-    else
-        *res = sensor->data.f;
-    HAL_UNLOCK(sensor);
-
-    return ret;
-}
-
-size_t HAL_rx_bytes(struct HAL_t *hal)
-{
-    size_t res = 0;
-    pthread_mutex_lock(&hal->mutex);
-    res = hal->rx_bytes;
-    pthread_mutex_unlock(&hal->mutex);
-    return res;
-}
-
-size_t HAL_tx_bytes(struct HAL_t *hal)
-{
-    size_t res = 0;
-    pthread_mutex_lock(&hal->mutex);
-    res = hal->tx_bytes;
-    pthread_mutex_unlock(&hal->mutex);
-    return res;
+    return pthread_create(&conn->reader_thread, NULL, HALConn_reader_thread, conn);
 }

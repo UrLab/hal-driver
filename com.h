@@ -1,38 +1,83 @@
-#ifndef DEFINE_SHAREDQUEUE_HEADER
-#define DEFINE_SHAREDQUEUE_HEADER
+#ifndef DEFINE_COM_HEADER
+#define DEFINE_COM_HEADER
 
-#include <stdbool.h>
-#include "HALResource.h"
+#include "HALMsg.h"
 
-bool HAL_init(struct HAL_t *hal, const char *arduino_dev);
+/*!
+ *  Connection to the arduino. Manage requests and responses,
+ */
+typedef struct HALConnection HALConnection;
 
-void HAL_socket_open(struct HAL_t *hal, const char *path);
+typedef enum HALErr {
+    OK        = 0, //!< No error
+    TIMEOUT   = 1, //!< Command timeouted
+    SEQERR    = 2, //!< No more seq no avialableat the moment
+    LOCKERR   = 3, //!< Cannot acquire lock on connection
+    CHKERR    = 4, //!< Checksum error
 
-void *HAL_read_thread(void *args);
+    READERR   = 5, //!< Cannot read
+    WRITEERR  = 6, //!< Cannot write
+    OUTOFSYNC = 7, //!< Encountered unexpected SYNC byte; must resync
 
-int HAL_ask_trigger(HALResource *trigger, bool *res);
+    UNKNERR   = 8  //!< Unknown error
+} HALErr;
 
-int HAL_set_switch(HALResource *sw, bool on);
-int HAL_ask_switch(HALResource *sw, bool *res);
+typedef enum HALLogLvl {
+    SILENT  = 0, //!< No logging at all
+    ERROR   = 1, //!< Errors only
+    WARNING = 2, //!< Errors and warnings
+    INFO    = 3, //!< Errors, warnings and informations
+    DEBUG   = 4, //!< Log everything
+    DUMP    = 5  //!< Log everything and dump HAL serial traffic 
+} HALLogLvl;
 
-int HAL_upload_anim(
-    HALResource *anim, 
-    unsigned char len, 
-    const unsigned char *frames
-);
+const char *HALErr_desc(HALErr err);
 
-int HAL_ask_anim_play(HALResource *anim, bool *res);
-int HAL_set_anim_play(HALResource *anim, bool play);
+HALConnection *HALConn_open(const char *path);
 
-int HAL_ask_anim_loop(HALResource *anim, bool *res);
-int HAL_set_anim_loop(HALResource *anim, bool loop);
+#define HAL_ERROR(conn,fmt,...) HALConn_log(conn, ERROR, fmt, ##__VA_ARGS__)
+#define HAL_WARN(conn,fmt,...) HALConn_log(conn, WARNING, fmt, ##__VA_ARGS__)
+#define HAL_INFO(conn,fmt,...) HALConn_log(conn, INFO, fmt, ##__VA_ARGS__)
+#define HAL_DEBUG(conn,fmt,...) HALConn_log(conn, DEBUG, fmt, ##__VA_ARGS__)
+void HALConn_log(HALConnection *conn, HALLogLvl lvl, const char *fmt, ...);
 
-int HAL_ask_anim_delay(HALResource *anim, unsigned char *res);
-int HAL_set_anim_delay(HALResource *anim, unsigned char delay);
+void HALConn_dump(HALConnection *conn, const HALMsg *msg, const char *prefix);
 
-int HAL_ask_sensor(HALResource *sensor, float *res);
+/*!
+ *  Set the loglevel
+ */
+void HALConn_loglevel(HALConnection *conn, HALLogLvl lvl);
 
-size_t HAL_rx_bytes(struct HAL_t *hal);
-size_t HAL_tx_bytes(struct HAL_t *hal);
+
+/*!
+ *  Close connection to Arduino
+ */
+void HALConn_close(HALConnection *conn);
+
+/*!
+ *  Read a message from Arduino
+ *  @param conn The HAL connection to use
+ *  @param msg Message received
+ */
+HALErr HALConn_read_message(HALConnection *conn, HALMsg *msg);
+
+
+HALErr HALConn_write_message(HALConnection *conn, const HALMsg *msg);
+
+/*!
+ *  Send request to HAL and wait for response
+ *  @param conn The HAL connection to use
+ *  @param msg [in+out] Message to send. Contains the response if return value
+                        is OK
+ *  @return One of HALErr
+ */
+HALErr HALConn_request(HALConnection *conn, HALMsg *msg);
+
+/*!
+ *  Start the read thread, and call reader for each correctly received message
+ *  @param conn The HAL connection to use
+ *  @param reader Function to call on each correctly received message
+ */
+int HALConn_run_reader(HALConnection *conn);
 
 #endif

@@ -5,7 +5,6 @@ TEST(create_node, {
     HALFS *node = HALFS_create("node");
     ASSERT(node->first_child == NULL);
     ASSERT(node->next_sibling == NULL);
-    ASSERT(node->backend == NULL);
     ASSERT(streq(node->name, "node"));
     ASSERT(HALFS_find(node, "/") == node);
     HALFS_destroy(node);

@@ -1,5 +1,4 @@
 #include "HALFS.h"
-#include "utils.h"
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
@@ -9,22 +8,17 @@
 char *strdup(const char *str);
 char *strndup(const char *str, size_t n);
 
-int HALFS_default_size(HALResource *path)
+int HALFS_default_trunc(HALConnection *conn, unsigned char id)
 {
     return 0;
 }
 
-int HALFS_default_trunc(HALResource *path)
+int HALFS_default_read(HALConnection *conn, unsigned char id, char *buf, size_t size, off_t offset)
 {
     return 0;
 }
 
-int HALFS_default_read(HALResource *path, char *buf, size_t size, off_t offset)
-{
-    return 0;
-}
-
-int HALFS_default_write(HALResource *path, const char *buf, size_t size, off_t offset)
+int HALFS_default_write(HALConnection *conn, unsigned char id, const char *buf, size_t size, off_t offset)
 {
     return 0;
 }
@@ -35,7 +29,7 @@ HALFS *HALFS_create(const char *name)
 	if (! res)
 		return NULL;
 	res->name = (const char *) strdup(name);
-	res->ops.size = HALFS_default_size;
+	res->ops.size = 0;
 	res->ops.read = HALFS_default_read;
 	res->ops.write = HALFS_default_write;
 	res->ops.trunc = HALFS_default_trunc;

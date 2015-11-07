@@ -1,368 +1,56 @@
+#include <fuse.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/file.h>
-#include <stdio.h>
-#include <glob.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <fuse.h>
-#include <time.h>
-#include "HALFS.h"
-#include "com.h"
-#include "utils.h"
-#include "logger.h"
-#include "version.h"
+#include "hal.h"
 
-static time_t start_time;
-static uid_t my_uid;
-static gid_t my_gid;
-static pthread_t com_thread;
+#define streq(s1,s2) (strcmp((s1),(s2)) == 0)
+#define HAL_IDX(cat,name) idx(name, hal->cat, hal->n_##cat)
 
-/* Root of virtual file system */
-HALFS *HALFS_root = NULL;
+static HAL *hal = NULL;
+static int my_uid, my_gid;
 
-/* Main HAL structure */
-static struct HAL_t hal;
-
-/* Attempt to find arduino in these path */
-const char *ARDUINO_DEV_PATH[] = {"/dev/tty.usbmodem*", "/dev/ttyUSB*", "/dev/ttyACM*"};
-
-int version_size(HALResource *backend){return 41;}
-
-/* cat /version */
-int arduino_version_read(HALResource *backend, char * buffer, size_t size, off_t offset)
+int split_path(const char *path, char parts[5][32])
 {
-    if (offset > 40)
-        return 0;
-    int l = min(size, (size_t) 41-offset);
-    sprintf(buffer, "%s\n", hal.version+offset);
-    return l;
-}
-
-/* cat /driver/version */
-int driver_version_read(HALResource *backend, char * buffer, size_t size, off_t offset)
-{
-    if (offset > 40)
-        return 0;
-    int l = min(size, (size_t) 41-offset);
-    sprintf(buffer, "%s\n", HAL_DRIVER_VERSION+offset);
-    return l;
-}
-
-int loglevel_size(HALResource *backend){return 2;}
-
-int loglevel_read(HALResource *backend, char * buffer, size_t size, off_t offset)
-{
-    if (offset > 1)
-        return 0;
-    sprintf(buffer, "%d\n", current_log_level);
-    return 2;
-}
-
-int loglevel_write(HALResource *anim, const char *buffer, size_t size, off_t offset)
-{
-    for (size_t i=0; i<size; i++){
-        if (('0' <= buffer[i]) && (buffer[i] <= '9')){
-            current_log_level = buffer[i] - '0';
-            break;
+    if (*path == '/'){
+        path++;
+    }
+    int i = 0;
+    int j = 0;
+    while (*path != '\0' && i<5){
+        if (*path == '/'){
+            parts[i][j] = '\0';
+            i++;
+            j = 0;
+        } else {
+            parts[i][j] = *path;
+            j++;
         }
+        path++;
     }
-    return size;
-}
-
-int rx_bytes_read(HALResource *backend, char * buffer, size_t size, off_t offset)
-{
-    int res = 0;
-    size_t rx = HAL_rx_bytes(&hal);
-    snprintf(buffer, size, "%lu\n%n", (unsigned long int) rx, &res);
+    parts[i][j] = '\0';
+    int res = (j == 0) ? i : i+1;
+    for (i=0; i<res; i++){
+        printf("PART[%d]: %s\n", i, parts[i]);
+    }
     return res;
 }
 
-int tx_bytes_read(HALResource *backend, char * buffer, size_t size, off_t offset)
+void *HALFS_init(struct fuse_conn_info *conn)
 {
-    int res = 0;
-    size_t tx = HAL_tx_bytes(&hal);
-    snprintf(buffer, size, "%lu\n%n", (unsigned long int) tx, &res);
-    return res;
-}
-
-int trigger_read(HALResource *trig, char *buffer, size_t size, off_t offset)
-{
-    bool active = false;
-    if (HAL_ask_trigger(trig, &active) != 0)
-        return -EAGAIN;
-    strcpy(buffer, active ? "1\n" : "0\n");
-    return 2;
-}
-
-int binary_size(HALResource *backend){return 2;}
-
-int switch_read(HALResource *sw, char *buffer, size_t size, off_t offset)
-{
-    bool active = false;
-    if (HAL_ask_switch(sw, &active) != 0)
-        return -EAGAIN;
-    strcpy(buffer, active ? "1\n" : "0\n");
-    return 2;
-}
-
-int switch_write(HALResource *sw, const char *buffer, size_t size, off_t offset)
-{
-    bool on = buffer[0] != '0';
-    if (HAL_set_switch(sw, on) != 0)
-        return -EAGAIN;
-    return size;
-}
-
-int animation_upload(HALResource *anim, const char *buffer, size_t size, off_t offset)
-{
-    unsigned char s = (size < 256) ? size : 255;
-    if (HAL_upload_anim(anim, s, (const unsigned char*) buffer))
-        return -EAGAIN;
-    return s;
-}
-
-int anim_loop_write(HALResource *anim, const char *buffer, size_t size, off_t offset)
-{
-    bool loop = buffer[0] != '0';
-    if (HAL_set_anim_loop(anim, loop) != 0)
-        return -EAGAIN;
-    return size;
-}
-
-int anim_loop_read(HALResource *anim, char *buffer, size_t size, off_t offset)
-{
-    bool looping = false;
-    if (HAL_ask_anim_loop(anim, &looping) != 0)
-        return -EAGAIN;
-    strcpy(buffer, looping ? "1\n" : "0\n");
-    return 2;
-}
-
-int anim_play_write(HALResource *anim, const char *buffer, size_t size, off_t offset)
-{
-    bool play = buffer[0] != '0';
-    if (HAL_set_anim_play(anim, play) != 0)
-        return -EAGAIN;
-    return size;
-}
-
-int anim_play_read(HALResource *anim, char *buffer, size_t size, off_t offset)
-{
-    bool playing = false;
-    if (HAL_ask_anim_play(anim, &playing) != 0)
-        return -EAGAIN;
-    strcpy(buffer, playing ? "1\n" : "0\n");
-    return 2;
-}
-
-int anim_fps_write(HALResource *anim, const char *buffer, size_t size, off_t offset)
-{
-    int fps = 0;
-    int k = 1;
-
-    // Quick parse uint
-    for (size_t i=size; i>0; i--){
-        if (buffer[i-1] < '0' || buffer[i-1] > '9')
-            continue;
-        fps += (buffer[i-1]-'0')*k;
-        k *= 10;
+    hal = HAL_connect();
+    if (! hal){
+        fprintf(stderr, "Cannot connect to arduino; quit !\n");
+        exit(1);
     }
-
-    // uint8 delay = 1..255 == 4..1000 fps
-    if (fps < 4)         fps = 4;
-    else if (fps > 1000) fps = 1000;
-    unsigned char delay = 1000/fps;
-
-    if (HAL_set_anim_delay(anim, delay) != 0)
-        return -EAGAIN;
-    return size;
-}
-
-int anim_fps_read(HALResource *anim, char *buffer, size_t size, off_t offset)
-{
-    int res;
-    unsigned char delay = 0;
-    if (HAL_ask_anim_delay(anim, &delay) != 0)
-        return -EAGAIN;
-    if (delay == 0) // Avoid zero division
-        delay = 1;
-    unsigned int fps = 1000/delay;
-    snprintf(buffer, size, "%hhu\n%n", fps, &res);
-    return res;
-}
-
-int anim_fps_size(HALResource *backend){return 4;}
-
-int sensor_size(HALResource *backend){return 13;}
-
-int sensor_read(HALResource *sensor, char *buffer, size_t size, off_t offset)
-{
-    int res = 0;
-    float val = 0;
-    if (HAL_ask_sensor(sensor, &val) != 0)
-        return -EAGAIN;
-    snprintf(buffer, size, "%f\n%n", val, &res);
-    return res;
-}
-
-int uptime_size(HALResource *backend)
-{
-    time_t dt = time(NULL) - start_time;
-    int res = 0;
-    char buffer[100];
-    sprintf(buffer, "%ld\n%n", dt, &res);
-    return res;
-}
-
-int uptime_read(HALResource *sensor, char *buffer, size_t size, off_t offset)
-{
-    time_t dt = time(NULL) - start_time;
-    snprintf(buffer, size, "%ld\n", dt);
-    return size;
-}
-
-/*
- * Build HALFS tree structure from detected I/O
- */
-static void HALFS_build()
-{
-    char path[128];
-    HALFS_root = HALFS_create("/");
-
-    my_uid = getuid();
-    my_gid = getgid();
-
-    HALFS * file = HALFS_insert(HALFS_root, "/version");
-    file->ops.read = arduino_version_read;
-    file->ops.size = version_size;
-    file = HALFS_insert(HALFS_root, "/driver/version");
-    file->ops.read = driver_version_read;
-    file->ops.size = version_size;
-
-    file = HALFS_insert(HALFS_root, "/driver/rx_bytes");
-    file->ops.read = rx_bytes_read;
-    file->ops.size = sensor_size;
-    file = HALFS_insert(HALFS_root, "/driver/tx_bytes");
-    file->ops.read = tx_bytes_read;
-    file->ops.size = sensor_size;
-    file = HALFS_insert(HALFS_root, "/driver/uptime");
-    file->ops.size = uptime_size;
-    file->ops.read = uptime_read;
-    file = HALFS_insert(HALFS_root, "/driver/loglevel");
-    file->ops.size = loglevel_size;
-    file->ops.read = loglevel_read;
-    file->ops.write = loglevel_write;
-
-    file = HALFS_insert(HALFS_root, "/events");
-    file->ops.mode = 0444;
-    file->ops.target = "/tmp/hal.sock";
-    
-    for (size_t i=0; i<hal.n_triggers; i++){
-        strcpy(path, "/triggers/");
-        strcat(path, hal.triggers[i].name);
-        file = HALFS_insert(HALFS_root, path);
-        file->backend = hal.triggers + i;
-        file->ops.read = trigger_read;
-        file->ops.size = binary_size;
-    }
-
-    for (size_t i=0; i<hal.n_sensors; i++){
-        strcpy(path, "/sensors/");
-        strcat(path, hal.sensors[i].name);
-        file = HALFS_insert(HALFS_root, path);
-        file->backend = hal.sensors + i;
-        file->ops.read = sensor_read;
-        file->ops.size = sensor_size;
-    }
-
-    for (size_t i=0; i<hal.n_switchs; i++){
-        strcpy(path, "/switchs/");
-        strcat(path, hal.switchs[i].name);
-        file = HALFS_insert(HALFS_root, path);
-        file->backend = hal.switchs + i;
-        file->ops.read = switch_read;
-        file->ops.write = switch_write;
-        file->ops.size = binary_size;
-    }
-
-    for (size_t i=0; i<hal.n_animations; i++){
-        strcpy(path, "/animations/");
-        strcat(path, hal.animations[i].name);
-        strcat(path, "/frames");
-        file = HALFS_insert(HALFS_root, path);
-        file->backend = hal.animations + i;
-        file->ops.write = animation_upload;
-
-        strcpy(path, "/animations/");
-        strcat(path, hal.animations[i].name);
-        strcat(path, "/play");
-        file = HALFS_insert(HALFS_root, path);
-        file->backend = hal.animations + i;
-        file->ops.read = anim_play_read;
-        file->ops.write = anim_play_write;
-        file->ops.size = binary_size;
-
-        strcpy(path, "/animations/");
-        strcat(path, hal.animations[i].name);
-        strcat(path, "/loop");
-        file = HALFS_insert(HALFS_root, path);
-        file->backend = hal.animations + i;
-        file->ops.read = anim_loop_read;
-        file->ops.write = anim_loop_write;
-        file->ops.size = binary_size;
-
-        strcpy(path, "/animations/");
-        strcat(path, hal.animations[i].name);
-        strcat(path, "/fps");
-        file = HALFS_insert(HALFS_root, path);
-        file->backend = hal.animations + i;
-        file->ops.read = anim_fps_read;
-        file->ops.write = anim_fps_write;
-        file->ops.size = anim_fps_size;
-    }
-}
-
-/*
- * Detect arduino and launch I/O thread
- */
-void * HALFS_init(struct fuse_conn_info *conn)
-{
-    glob_t globbuf;
-    globbuf.gl_offs = 0;
-
-    int flag = GLOB_DOOFFS;
-    for(size_t i = 0; i < sizeof(ARDUINO_DEV_PATH)/sizeof(char *); i++){
-        if (i == 1)
-            flag = flag | GLOB_APPEND;
-        glob(ARDUINO_DEV_PATH[i], flag, NULL, &globbuf);
-    }
-    INFO("Found %lu possible arduinos in /dev/", (long unsigned int) globbuf.gl_pathc);
-    for (size_t i = 0; i < globbuf.gl_pathc; i++){
-        DEBUG("Trying %s", globbuf.gl_pathv[i]);
-        if (HAL_init(&hal, globbuf.gl_pathv[i]))
-            break;
-        WARN("Skip %s", globbuf.gl_pathv[i]);
-    }
-    globfree(&globbuf);
-
-    if (! hal.ready){
-        ERROR("Unable to find suitable arduino; force quit");
-        exit(EXIT_FAILURE);
-    }
-    HAL_socket_open(&hal, "/tmp/hal.sock");
-    HALFS_build();
-    pthread_create(&com_thread, NULL, HAL_read_thread, &hal);
+    HALFS_printTree(hal->root, 0);
     return NULL;
 }
 
-
-/* ================= FUSE Operations ================= */
 static int HALFS_open(const char *path, struct fuse_file_info *fi)
 {
-    HALFS *file = HALFS_find(HALFS_root, path);
+    HALFS *file = HALFS_find(hal->root, path);
     if (file)
         return 0;
     return -ENOENT;
@@ -375,11 +63,11 @@ static int HALFS_read(
     off_t offset,
     struct fuse_file_info *fi
 ){
-    HALFS *file = HALFS_find(HALFS_root, path);
+    HALFS *file = HALFS_find(hal->root, path);
     int res = -ENOENT;
     if (file){
-        res = file->ops.read(file->backend, buf, size, offset);
-        DEBUG("Finished READ %s (call len:%lu return len:%d)", path, size, res);
+        res = file->ops.read(hal->conn, file->id, buf, size, offset);
+        //DEBUG("Finished READ %s (call len:%lu return len:%d)", path, size, res);
     }
     return res;
 }
@@ -392,29 +80,29 @@ static int HALFS_write(
     off_t offset,
     struct fuse_file_info *fi
 ){
-    HALFS *file = HALFS_find(HALFS_root, path);
+    HALFS *file = HALFS_find(hal->root, path);
     int res = -ENOENT;
     if (file){
-        res = file->ops.write(file->backend, buf, size, offset);
-        DEBUG("Finished WRITE %s (call len:%lu return len:%d)", path, size, res);
+        res = file->ops.write(hal->conn, file->id, buf, size, offset);
+        //DEBUG("Finished WRITE %s (call len:%lu return len:%d)", path, size, res);
     }
     return res;
 }
 
 static int HALFS_size(const char *path, struct fuse_file_info *fi)
 {
-    HALFS *file = HALFS_find(HALFS_root, path);
+    HALFS *file = HALFS_find(hal->root, path);
     if (file)
-        return file->ops.size(file->backend);
+        return (int) file->ops.size;
     return -ENOENT;
 }
 
 
 static int HALFS_trunc(const char *path, off_t offset) 
 {
-    HALFS *file = HALFS_find(HALFS_root, path);
+    HALFS *file = HALFS_find(hal->root, path);
     if (file)
-        return file->ops.trunc(file->backend);
+        return file->ops.trunc(hal->conn, file->id);
     return -ENOENT;
 }
 
@@ -426,7 +114,7 @@ static int HALFS_readdir(
     struct fuse_file_info *fi
 ){
 
-    HALFS *dir = HALFS_find(HALFS_root, path);
+    HALFS *dir = HALFS_find(hal->root, path);
     if (! dir)
         return -ENOENT;
 
@@ -441,7 +129,7 @@ static int HALFS_readdir(
 
 static int HALFS_readlink(const char *path, char *buf, size_t size)
 {
-    HALFS *file = HALFS_find(HALFS_root, path);
+    HALFS *file = HALFS_find(hal->root, path);
     if (file){
         if (file->ops.target == NULL)
             return -ENOENT;
@@ -454,7 +142,7 @@ static int HALFS_readlink(const char *path, char *buf, size_t size)
 static int HALFS_getattr(const char *path, struct stat *stbuf)
 {
     memset(stbuf, 0, sizeof(struct stat));
-    HALFS *file = HALFS_find(HALFS_root, path);
+    HALFS *file = HALFS_find(hal->root, path);
     if (! file)
         return -ENOENT;
 
@@ -476,7 +164,7 @@ static int HALFS_getattr(const char *path, struct stat *stbuf)
         /* otherwise: Regular file */
         stbuf->st_mode |= S_IFREG;
         stbuf->st_nlink = 1;
-        stbuf->st_size = file->ops.size(file->backend);
+        stbuf->st_size = file->ops.size;
     }
 
     return 0;
@@ -492,10 +180,12 @@ static struct fuse_operations hal_ops = {
     .init       = HALFS_init,
     .readlink   = HALFS_readlink
 };
+
 /* ============================================== */
 
 int main(int argc, char *argv[])
 {
-    start_time = time(NULL);
+    my_uid = getuid();
+    my_gid = getgid();
     return fuse_main(argc, argv, &hal_ops, NULL);
 }

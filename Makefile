@@ -1,7 +1,7 @@
 include Makefile.flags
 
 TARGET = driver
-OBJS = HALFS.o arduino-serial-lib.o com.o HALMsg.o logger.o
+OBJS = com.o hal.o HALFS.o
 VERSION = $(shell git log | head -1 | cut -d ' ' -f 2)
 
 all: ${TARGET}
