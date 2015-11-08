@@ -214,6 +214,7 @@ static void HAL_insert_animation(HALFS *root, const char *name, unsigned char id
     node->ops.size = 5;
     node->ops.read = anim_fps_read;
     node->ops.write = anim_fps_write;
+    node->id = id;
 
     sprintf(path, "/animations/%s/loop", name);
     node = HALFS_insert(root, path);
@@ -221,6 +222,7 @@ static void HAL_insert_animation(HALFS *root, const char *name, unsigned char id
     node->ops.size = 2;
     node->ops.read = anim_loop_read;
     node->ops.write = anim_loop_write;
+    node->id = id;
 
     sprintf(path, "/animations/%s/play", name);
     node = HALFS_insert(root, path);
@@ -228,6 +230,7 @@ static void HAL_insert_animation(HALFS *root, const char *name, unsigned char id
     node->ops.size = 2;
     node->ops.read = anim_play_read;
     node->ops.write = anim_play_write;
+    node->id = id;
 
     sprintf(path, "/animations/%s/frames", name);
     node = HALFS_insert(root, path);
@@ -235,6 +238,7 @@ static void HAL_insert_animation(HALFS *root, const char *name, unsigned char id
     node->ops.size = 255;
     node->ops.read = anim_frames_read;
     node->ops.write = anim_frames_write;
+    node->id = id;
 }
 
 static HALErr HAL_load(HAL *hal)
@@ -283,6 +287,7 @@ static HALErr HAL_load(HAL *hal)
                     node->ops.mode = 0444;
                     node->ops.read = sensor_read;
                     node->ops.size = 13;
+                    node->id = i;
                     HAL_DEBUG("  Inserted sensor %s", node->name);
                 }
                 break;
@@ -302,6 +307,7 @@ static HALErr HAL_load(HAL *hal)
                     node->ops.write = switch_write;
                     node->ops.read = switch_read;
                     node->ops.size = 2;
+                    node->id = i;
                     HAL_DEBUG("  Inserted switch %s", node->name);
                 }
                 break;
