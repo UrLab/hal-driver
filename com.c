@@ -319,7 +319,7 @@ static void *HALConn_reader_thread(void *arg)
     HALMsg msg;
     struct pollfd polled = {.fd = conn->fd, .events = POLLIN};
 
-    HAL_INFO("Reader thread started\n");
+    HAL_INFO("Reader thread started");
 
     while (1){
         /* Wait for arduino readyness */
@@ -345,4 +345,22 @@ static void *HALConn_reader_thread(void *arg)
 int HALConn_run_reader(HALConnection *conn)
 {
     return pthread_create(&conn->reader_thread, NULL, HALConn_reader_thread, conn);
+}
+
+size_t HALConn_rx_bytes(HALConnection *conn)
+{
+    size_t res = 0;
+    pthread_mutex_lock(&conn->mutex);
+    res = conn->rx_bytes;
+    pthread_mutex_unlock(&conn->mutex);
+    return res;
+}
+
+size_t HALConn_tx_bytes(HALConnection *conn)
+{
+    size_t res = 0;
+    pthread_mutex_lock(&conn->mutex);
+    res = conn->tx_bytes;
+    pthread_mutex_unlock(&conn->mutex);
+    return res;
 }

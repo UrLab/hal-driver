@@ -165,6 +165,44 @@ int anim_frames_write(HALConnection *conn, unsigned char switch_id, const char *
     return size;
 }
 
+/* === driver === */
+int driver_rx_bytes_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
+{
+    unsigned long int rx = HALConn_rx_bytes(conn);
+    return snprintf(buf, size, "%lu\n",  rx);
+}
+
+int driver_tx_bytes_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
+{
+    unsigned long int tx = HALConn_tx_bytes(conn);
+    return snprintf(buf, size, "%lu\n",  tx);
+}
+
+int driver_loglevel_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
+{
+    return snprintf(buf, size, "%d\n",  current_log_level);
+}
+
+int driver_loglevel_write(HALConnection *conn, unsigned char unused_id, const char *buf, size_t size, off_t offset)
+{
+    char *endptr;
+    int val = strtol(buf, &endptr, 10);
+    if (endptr == buf || val < SILENT || val > DUMP){
+        return -EINVAL;
+    }
+    current_log_level = val;
+    return size;
+}
+
+int driver_version_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
+{
+#ifndef HAL_DRIVER_VERSION
+    return snprintf(buf, size, "YOLO\n");
+#else
+    return snprintf(buf, size, "%s\n", HAL_DRIVER_VERSION);
+#endif
+}
+
 static void HAL_insert_animation(HALFS *root, const char *name, unsigned char id)
 {
     char path[255];
@@ -295,11 +333,35 @@ static HALErr HAL_load(HAL *hal)
                     node->ops.mode = 0444;
                     node->ops.read = trigger_read;
                     node->ops.size = 2;
+                    node->id = i;
                     HAL_DEBUG("  Inserted trigger %s", node->name);
                 }
                 break;
         }
     }
+
+    node = HALFS_insert(hal->root, "/driver/rx_bytes");
+    node->ops.mode = 0444;
+    node->ops.read = driver_rx_bytes_read;
+    node->ops.size = 11;
+
+    node = HALFS_insert(hal->root, "/driver/tx_bytes");
+    node->ops.mode = 0444;
+    node->ops.read = driver_tx_bytes_read;
+    node->ops.size = 11;
+
+    node = HALFS_insert(hal->root, "/driver/loglevel");
+    node->ops.mode = 0666;
+    node->ops.read = driver_loglevel_read;
+    node->ops.write = driver_loglevel_write;
+    node->ops.size = 2;
+
+    node = HALFS_insert(hal->root, "/driver/version");
+    node->ops.mode = 0444;
+    node->ops.read = driver_version_read;
+    node->ops.size = 41;
+
+    HAL_DEBUG("Inserted driver files");
 
     return OK;
 }
