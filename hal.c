@@ -94,9 +94,9 @@ int anim_fps_write(HALConnection *conn, unsigned char anim_id, const char *buf, 
 }
 
 /* === Animations loop === */
-int anim_loop_read(HALConnection *conn, unsigned char switch_id, char *buf, size_t size, off_t offset)
+int anim_loop_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t size, off_t offset)
 {
-    HALMsg msg = {.cmd=(PARAM_ASK|ANIMATION_LOOP), .rid=switch_id, .len=0};
+    HALMsg msg = {.cmd=(PARAM_ASK|ANIMATION_LOOP), .rid=anim_id, .len=0};
     HALErr err = HALConn_request(conn, &msg);
     if (err != OK){
         return -EAGAIN;
@@ -104,9 +104,9 @@ int anim_loop_read(HALConnection *conn, unsigned char switch_id, char *buf, size
     return snprintf(buf, size, "%c\n", msg.data[0] ? '1' : '0');
 }
 
-int anim_loop_write(HALConnection *conn, unsigned char switch_id, const char *buf, size_t size, off_t offset)
+int anim_loop_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
 {
-    HALMsg msg = {.cmd=(PARAM_CHANGE|ANIMATION_LOOP), .rid=switch_id, .len=1};
+    HALMsg msg = {.cmd=(PARAM_CHANGE|ANIMATION_LOOP), .rid=anim_id, .len=1};
     msg.data[0] = (buf[0] == '0') ? 0 : 1;
     HALErr err = HALConn_request(conn, &msg);
     if (err != OK){
@@ -116,9 +116,9 @@ int anim_loop_write(HALConnection *conn, unsigned char switch_id, const char *bu
 }
 
 /* === Animations playing === */
-int anim_play_read(HALConnection *conn, unsigned char switch_id, char *buf, size_t size, off_t offset)
+int anim_play_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t size, off_t offset)
 {
-    HALMsg msg = {.cmd=(PARAM_ASK|ANIMATION_PLAY), .rid=switch_id, .len=0};
+    HALMsg msg = {.cmd=(PARAM_ASK|ANIMATION_PLAY), .rid=anim_id, .len=0};
     HALErr err = HALConn_request(conn, &msg);
     if (err != OK){
         return -EAGAIN;
@@ -126,9 +126,9 @@ int anim_play_read(HALConnection *conn, unsigned char switch_id, char *buf, size
     return snprintf(buf, size, "%c\n", msg.data[0] ? '1' : '0');
 }
 
-int anim_play_write(HALConnection *conn, unsigned char switch_id, const char *buf, size_t size, off_t offset)
+int anim_play_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
 {
-    HALMsg msg = {.cmd=(PARAM_CHANGE|ANIMATION_PLAY), .rid=switch_id, .len=1};
+    HALMsg msg = {.cmd=(PARAM_CHANGE|ANIMATION_PLAY), .rid=anim_id, .len=1};
     msg.data[0] = (buf[0] == '0') ? 0 : 1;
     HALErr err = HALConn_request(conn, &msg);
     if (err != OK){
@@ -138,9 +138,9 @@ int anim_play_write(HALConnection *conn, unsigned char switch_id, const char *bu
 }
 
 /* === Animations frames === */
-int anim_frames_read(HALConnection *conn, unsigned char switch_id, char *buf, size_t size, off_t offset)
+int anim_frames_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t size, off_t offset)
 {
-    HALMsg msg = {.cmd=(PARAM_ASK|ANIMATION_FRAMES), .rid=switch_id, .len=0};
+    HALMsg msg = {.cmd=(PARAM_ASK|ANIMATION_FRAMES), .rid=anim_id, .len=0};
     HALErr err = HALConn_request(conn, &msg);
     if (err != OK){
         return -EAGAIN;
@@ -150,13 +150,13 @@ int anim_frames_read(HALConnection *conn, unsigned char switch_id, char *buf, si
     return len;
 }
 
-int anim_frames_write(HALConnection *conn, unsigned char switch_id, const char *buf, size_t size, off_t offset)
+int anim_frames_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
 {
     if (size == 0 || size > 255){
         return -EINVAL;
     }
-    HALMsg msg = {.cmd=(PARAM_CHANGE|ANIMATION_FRAMES), .rid=switch_id, .len=size};
-    memcpy(msg.data, buf, size);
+    HALMsg msg = {.cmd=(PARAM_CHANGE|ANIMATION_FRAMES), .rid=anim_id, .len=size};
+    memcpy(msg.data, buf, msg.len);
 
     HALErr err = HALConn_request(conn, &msg);
     if (err != OK){

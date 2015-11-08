@@ -181,14 +181,15 @@ HALErr HALConn_write_message(HALConnection *conn, const HALMsg *msg)
     }
 
     /* Write message itself */
-    for (int i=0; i<5+msg->len; i++){
+    size_t nbytes = ((size_t) msg->len) + 5;
+    for (size_t i=0; i<nbytes; i++){
         r = HAL_write_byte(conn, bytes[i]);
         if (r != OK){
             return r;
         }
     }
 
-    dump_message(msg, " << ");
+    dump_message(msg, " \033[1;34m<<\033[0m ");
 
     return OK;
 }
@@ -232,7 +233,7 @@ HALErr HALConn_read_message(HALConnection *conn, HALMsg *msg)
         }
     }
 
-    dump_message(msg, " >> ");
+    dump_message(msg, " \033[1;35m>>\033[0m ");
 
     /* 4. Verify checksum */
     return (HALMsg_checksum(msg) == msg->chk) ? OK : CHKERR;
@@ -278,6 +279,8 @@ HALErr HALConn_request(HALConnection *conn, HALMsg *msg)
             r = pthread_cond_timedwait(conn->waits+seq, &conn->mutex, &timeout);
             if (r == ETIMEDOUT){
                 retval = TIMEOUT;
+                HAL_WARN("Timeout on message");
+                dump_message(msg, "Timeouted request");
             }
             else if (r != 0){
                 retval = UNKNERR;

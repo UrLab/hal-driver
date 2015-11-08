@@ -46,7 +46,8 @@ static inline unsigned char HALMsg_checksum(HALMsg *msg)
 
     /* Sum of bytes above chk */
     unsigned char *bytes = (unsigned char *) msg + 1;
-    for (unsigned char i=0; i<msg->len+4; i++){
+    size_t nbytes = ((size_t) msg->len) + 4;
+    for (size_t i=0; i<nbytes; i++){
         res += bytes[i];
     }
 

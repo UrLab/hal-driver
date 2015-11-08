@@ -41,7 +41,7 @@ static int HALFS_read(
     int res = -ENOENT;
     if (file){
         res = file->ops.read(hal->conn, file->id, buf, size, offset);
-        //DEBUG("Finished READ %s (call len:%lu return len:%d)", path, size, res);
+        HAL_DEBUG("READ %s (len: %lu -> %d)", path, size, res);
     }
     return res;
 }
@@ -58,7 +58,7 @@ static int HALFS_write(
     int res = -ENOENT;
     if (file){
         res = file->ops.write(hal->conn, file->id, buf, size, offset);
-        //DEBUG("Finished WRITE %s (call len:%lu return len:%d)", path, size, res);
+        HAL_DEBUG("WRITE %s (len: %lu -> %d)", path, size, res);
     }
     return res;
 }
@@ -66,8 +66,11 @@ static int HALFS_write(
 static int HALFS_size(const char *path, struct fuse_file_info *fi)
 {
     HALFS *file = HALFS_find(hal->root, path);
-    if (file)
-        return (int) file->ops.size;
+    if (file){
+        int res = file->ops.size;
+        HAL_DEBUG("SIZE %s: %d", path, res);
+        return res;
+    }
     return -ENOENT;
 }
 
@@ -75,8 +78,10 @@ static int HALFS_size(const char *path, struct fuse_file_info *fi)
 static int HALFS_trunc(const char *path, off_t offset) 
 {
     HALFS *file = HALFS_find(hal->root, path);
-    if (file)
+    if (file){
+        HAL_DEBUG("TRUNC %s", path);
         return file->ops.trunc(hal->conn, file->id);
+    }
     return -ENOENT;
 }
 
