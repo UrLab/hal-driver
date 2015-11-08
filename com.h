@@ -55,6 +55,8 @@ HALErr HALConn_request(HALConnection *conn, HALMsg *msg);
  */
 int HALConn_run_reader(HALConnection *conn);
 
+int HALConn_uptime(HALConnection *conn);
+
 size_t HALConn_rx_bytes(HALConnection *conn);
 
 size_t HALConn_tx_bytes(HALConnection *conn);

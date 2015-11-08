@@ -34,6 +34,7 @@ struct HALConnection {
     /* Stats */
     size_t rx_bytes;
     size_t tx_bytes;
+    time_t start_time;
 };
 
 static int set_termios_opts(int fd)
@@ -319,7 +320,14 @@ static void *HALConn_reader_thread(void *arg)
     HALMsg msg;
     struct pollfd polled = {.fd = conn->fd, .events = POLLIN};
 
+    r = pthread_mutex_lock(&conn->mutex);
+    if (r != 0){
+        return NULL;
+    }
+    conn->start_time = time(NULL);
     HAL_INFO("Reader thread started");
+    pthread_mutex_unlock(&conn->mutex);
+
 
     while (1){
         /* Wait for arduino readyness */
@@ -333,7 +341,7 @@ static void *HALConn_reader_thread(void *arg)
             if (r == OK){
                 HALConn_dispatch(conn, &msg);
             } else {
-                HAL_ERROR(r, "Error while reading message");
+                HAL_ERROR(r, "Error while acquiring message in reader thread");
             }
             pthread_mutex_unlock(&conn->mutex);
         }
@@ -361,6 +369,15 @@ size_t HALConn_tx_bytes(HALConnection *conn)
     size_t res = 0;
     pthread_mutex_lock(&conn->mutex);
     res = conn->tx_bytes;
+    pthread_mutex_unlock(&conn->mutex);
+    return res;
+}
+
+int HALConn_uptime(HALConnection *conn)
+{
+    int res = 0;
+    pthread_mutex_lock(&conn->mutex);
+    res = time(NULL) - conn->start_time;
     pthread_mutex_unlock(&conn->mutex);
     return res;
 }

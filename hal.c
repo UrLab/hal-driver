@@ -203,6 +203,15 @@ int driver_version_read(HALConnection *conn, unsigned char unused_id, char *buf,
 #endif
 }
 
+int driver_uptime_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
+{
+    unsigned long int rx = HALConn_uptime(conn);
+    return snprintf(buf, size, "%lu\n",  rx);
+}
+
+
+/* === Loading functions === */
+
 static void HAL_insert_animation(HALFS *root, const char *name, unsigned char id)
 {
     char path[255];
@@ -366,6 +375,11 @@ static HALErr HAL_load(HAL *hal)
     node->ops.mode = 0444;
     node->ops.read = driver_version_read;
     node->ops.size = 41;
+
+    node = HALFS_insert(hal->root, "/driver/uptime");
+    node->ops.mode = 0444;
+    node->ops.read = driver_uptime_read;
+    node->ops.size = 11;
 
     HAL_DEBUG("Inserted driver files");
 
