@@ -305,7 +305,7 @@ static void HALConn_dispatch(HALConnection *conn, HALMsg *msg)
         pthread_cond_signal(conn->waits+i);
     }
     else {
-        if (MSG_TYPE(msg) == PING){
+        if (MSG_TYPE(msg) == HAL_PING){
             HALConn_write_message(conn, msg);
         } else if (MSG_TYPE(msg) == BOOT){
             HAL_WARN("Arduino rebooted");
