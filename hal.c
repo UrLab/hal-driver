@@ -336,6 +336,9 @@ static HALErr HAL_load(HAL *hal)
             case TRIGGER:
                 HAL_DEBUG("Loading %hhu triggers", n);
                 file = path + sprintf(path, "/triggers/");
+
+                hal->n_triggers = n;
+                hal->trigger_names = calloc(n, sizeof(char*));
                 for (unsigned char i=0; i<n; i++){
                     err = HALConn_read_message(hal->conn, &msg);
                     if (err != OK){
@@ -344,6 +347,7 @@ static HALErr HAL_load(HAL *hal)
                     }
                     msg.data[msg.len] = '\0';
                     strcpy(file, (const char *) msg.data);
+                    hal->trigger_names[i] = strndup((const char *) msg.data, 255);
                     node = HALFS_insert(hal->root, path);
                     node->ops.mode = 0444;
                     node->ops.read = trigger_read;
@@ -381,6 +385,9 @@ static HALErr HAL_load(HAL *hal)
     node->ops.read = driver_uptime_read;
     node->ops.size = 11;
 
+    node = HALFS_insert(hal->root, "/events");
+    node->ops.target = HALConn_sock_path(hal->conn);
+
     HAL_DEBUG("Inserted driver files");
 
     return OK;
@@ -402,9 +409,12 @@ HAL *HAL_connect()
     }
     HAL_INFO("Found %lu possible arduinos in /dev/", (long unsigned int) globbuf.gl_pathc);
     
+    char sock_path[256];
+    snprintf(sock_path, sizeof(sock_path), "/tmp/hal-%d.sock", (int) time(NULL));
+
     for (size_t i = 0; i < globbuf.gl_pathc; i++){
         HAL_DEBUG("Trying %s", globbuf.gl_pathv[i]);
-        conn = HALConn_open(globbuf.gl_pathv[i]);
+        conn = HALConn_open(globbuf.gl_pathv[i], sock_path);
         sleep(2);
 
         if (! conn){
@@ -415,7 +425,7 @@ HAL *HAL_connect()
             res->root = HALFS_create("/");
             if (HAL_load(res) == OK){
                 HAL_INFO("Connected to %s !", globbuf.gl_pathv[i]);
-                HALConn_run_reader(conn);
+                HALConn_run_reader(conn, res->trigger_names, res->n_triggers);
             } else {
                 free(res);
                 HALConn_close(conn);

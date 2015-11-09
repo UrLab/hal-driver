@@ -22,7 +22,7 @@ typedef enum HALErr {
     UNKNERR   = 8  //!< Unknown error
 } HALErr;
 
-HALConnection *HALConn_open(const char *path);
+HALConnection *HALConn_open(const char *path, const char *sock_path);
 
 /*!
  *  Close connection to Arduino
@@ -53,12 +53,14 @@ HALErr HALConn_request(HALConnection *conn, HALMsg *msg);
  *  @param conn The HAL connection to use
  *  @param reader Function to call on each correctly received message
  */
-int HALConn_run_reader(HALConnection *conn);
+int HALConn_run_reader(HALConnection *conn, const char **trigger_names, size_t n_triggers);
 
 int HALConn_uptime(HALConnection *conn);
 
 size_t HALConn_rx_bytes(HALConnection *conn);
 
 size_t HALConn_tx_bytes(HALConnection *conn);
+
+const char *HALConn_sock_path(HALConnection *conn);
 
 #endif

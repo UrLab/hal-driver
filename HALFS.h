@@ -15,7 +15,7 @@ struct HALFS_t {
 	HALFS *first_child, *next_sibling;
     unsigned char id;
     struct {
-        char * target; /* Target for symlinks */
+        const char *target; /* Target for symlinks */
         int mode; /* File mode */
         size_t size;
         int (* trunc)(HALConnection *, unsigned char); /* File truncate */

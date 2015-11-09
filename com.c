@@ -11,9 +11,17 @@
 #include <poll.h>
 #include <termios.h>
 #include <sys/fcntl.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <sys/stat.h>
 
 static const unsigned char SYNC = 0xff;
 static const unsigned char  ESC = 0xaa;
+
+#ifndef HALCONN_SOCK_CLIENTS
+#define HALCONN_SOCK_CLIENTS 42
+#endif
 
 struct HALConnection {
     /* Arduino FD */
@@ -31,6 +39,11 @@ struct HALConnection {
     unsigned char    used[HALMSG_SEQ_MAX+1];
     HALMsg      responses[HALMSG_SEQ_MAX+1];
 
+    int sock;
+    int sock_clients[HALCONN_SOCK_CLIENTS];
+    size_t n_sock_clients;
+    const char *sock_path;
+
     /* Stats */
     size_t rx_bytes;
     size_t tx_bytes;
@@ -45,7 +58,7 @@ static int set_termios_opts(int fd)
         return 0;
     }
 
-    speed_t brate = B115200; // let you override switch below if needed
+    speed_t brate = B115200;
     cfsetispeed(&toptions, brate);
     cfsetospeed(&toptions, brate);
 
@@ -66,14 +79,14 @@ static int set_termios_opts(int fd)
     toptions.c_cc[VTIME] = 0;
     
     tcsetattr(fd, TCSANOW, &toptions);
-    if(tcsetattr(fd, TCSAFLUSH, &toptions) < 0) {
+    if (tcsetattr(fd, TCSAFLUSH, &toptions) < 0) {
         return 0;
     }
 
     return 1;
 }
 
-HALConnection *HALConn_open(const char *path)
+HALConnection *HALConn_open(const char *path, const char *sock_path)
 {
     int fd = open(path, O_RDWR);
     
@@ -93,6 +106,20 @@ HALConnection *HALConn_open(const char *path)
     for (size_t i=0; i<HALMSG_SEQ_MAX+1; i++){
         pthread_cond_init(res->waits+i, NULL);
     }
+
+    res->start_time = time(NULL);
+    res->sock_path = strndup(sock_path, 256);
+
+    struct sockaddr_un sock_desc;
+    strcpy(sock_desc.sun_path, sock_path);
+
+    size_t len = strlen(sock_desc.sun_path) + sizeof(sock_desc.sun_family);
+    res->sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    sock_desc.sun_family = AF_UNIX;
+
+    bind(res->sock, (struct sockaddr *)&sock_desc, len);
+    listen(res->sock, HALCONN_SOCK_CLIENTS);
+    chmod(sock_desc.sun_path, 0777);
 
     return res;
 }
@@ -300,7 +327,33 @@ HALErr HALConn_request(HALConnection *conn, HALMsg *msg)
     return retval;
 }
 
-static void HALConn_dispatch(HALConnection *conn, HALMsg *msg)
+struct reader_opts {
+    HALConnection *conn;
+    const char **trigger_names;
+    size_t n_triggers;
+};
+
+static void HALConn_trigger_socket(HALConnection *conn, const char *name, int state)
+{
+    int r;
+    char buf[256];
+    int len = snprintf(buf, sizeof(buf)-1, "%s:%d\n", name, state);
+
+    for (size_t i=0; i<conn->n_sock_clients; i++){
+        HAL_DEBUG("%d << %s", conn->sock_clients[i], buf);
+        r = send(conn->sock_clients[i], buf, len, MSG_NOSIGNAL);
+        if (r < 0){
+            HAL_WARN("Lost listener %d", conn->sock_clients[i]);
+            close(conn->sock_clients[i]);
+            conn->n_sock_clients--;
+            if (conn->n_sock_clients > 0){
+                conn->sock_clients[i] = conn->sock_clients[conn->n_sock_clients];
+            }
+        }
+    }
+}
+
+static void HALConn_dispatch(HALConnection *conn, HALMsg *msg, struct reader_opts *opts)
 {
     if (IS_DRIVER_SEQ(msg->seq)){
         size_t i = ABSOLUTE_SEQ(msg->seq);
@@ -312,40 +365,60 @@ static void HALConn_dispatch(HALConnection *conn, HALMsg *msg)
             HALConn_write_message(conn, msg);
         } else if (MSG_TYPE(msg) == BOOT){
             HAL_WARN("Arduino rebooted");
+        } else if (msg->cmd == (TRIGGER|PARAM_CHANGE)){
+            unsigned char trigger_id = msg->rid;
+            unsigned char state = msg->data[0];
+            if (trigger_id < opts->n_triggers){
+                HALConn_trigger_socket(conn, opts->trigger_names[trigger_id], state);
+            }
         }
     }
 }
 
 static void *HALConn_reader_thread(void *arg)
 {
-    HALConnection *conn = (HALConnection *) arg;
+    struct reader_opts *opts = (struct reader_opts *) arg;
+    HALConnection *conn = opts->conn;
     int r = 0;
     HALMsg msg;
-    struct pollfd polled = {.fd = conn->fd, .events = POLLIN};
+    struct pollfd polled[2] = {
+        {.fd = conn->fd, .events = POLLIN},
+        {.fd = conn->sock, .events = POLLIN},
+    };
 
-    r = pthread_mutex_lock(&conn->mutex);
-    if (r != 0){
-        return NULL;
-    }
-    conn->start_time = time(NULL);
     HAL_INFO("Reader thread started");
-    pthread_mutex_unlock(&conn->mutex);
-
 
     while (1){
         /* Wait for arduino readyness */
-        do {r = poll(&polled, 1, 1000);}
-        while (r != 1);
+        do {r = poll(polled, 2, 1000);}
+        while (r == 0);
+
+        if (r < 0){
+            HAL_ERROR(UNKNERR, "Poll error");
+            continue;
+        }
 
         /* Acquire lock and read message */
         r = pthread_mutex_lock(&conn->mutex);
         if (r == 0){
-            r = HALConn_read_message(conn, &msg);
-            if (r == OK){
-                HALConn_dispatch(conn, &msg);
-            } else {
-                HAL_ERROR(r, "Error while acquiring message in reader thread");
+            if ((polled[0].revents) & POLLIN){
+                r = HALConn_read_message(conn, &msg);
+                if (r == OK){
+                    HALConn_dispatch(conn, &msg, opts);
+                } else {
+                    HAL_ERROR(r, "Error while acquiring message in reader thread");
+                }
+                polled[0].revents = 0;
             }
+
+            if ((polled[1].revents) & POLLIN){
+                int fd = accept(conn->sock, NULL, NULL);
+                conn->sock_clients[conn->n_sock_clients] = fd;
+                conn->n_sock_clients++;
+                HAL_INFO("New listener: %d", fd);
+                polled[1].revents = 0;
+            }
+
             pthread_mutex_unlock(&conn->mutex);
         }
     }
@@ -353,9 +426,13 @@ static void *HALConn_reader_thread(void *arg)
     return NULL;
 }
 
-int HALConn_run_reader(HALConnection *conn)
+int HALConn_run_reader(HALConnection *conn, const char **trigger_names, size_t n_triggers)
 {
-    return pthread_create(&conn->reader_thread, NULL, HALConn_reader_thread, conn);
+    struct reader_opts *opts = calloc(1, sizeof(struct reader_opts));
+    opts->conn = conn;
+    opts->trigger_names = trigger_names;
+    opts->n_triggers = n_triggers;
+    return pthread_create(&conn->reader_thread, NULL, HALConn_reader_thread, opts);
 }
 
 size_t HALConn_rx_bytes(HALConnection *conn)
@@ -383,4 +460,9 @@ int HALConn_uptime(HALConnection *conn)
     res = time(NULL) - conn->start_time;
     pthread_mutex_unlock(&conn->mutex);
     return res;
+}
+
+const char *HALConn_sock_path(HALConnection *conn)
+{
+    return conn->sock_path;
 }
