@@ -135,7 +135,7 @@ void HALConn_close(HALConnection *conn)
         close(conn->sock_clients[i]);
     }
     unlink(conn->sock_path);
-    free(conn->sock_path);
+    free((void*) conn->sock_path);
     pthread_mutex_destroy(&conn->mutex);
     for (size_t i=0; i<HALMSG_SEQ_MAX; i++){
         pthread_cond_destroy(conn->waits+i);

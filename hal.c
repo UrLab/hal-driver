@@ -15,7 +15,7 @@ const char *ARDUINO_DEV_PATH[] = {
 };
 
 /* === Sensors === */
-int sensor_read(HALConnection *conn, unsigned char sensor_id, char *buf, size_t size, off_t offset)
+static int sensor_read(HALConnection *conn, unsigned char sensor_id, char *buf, size_t size, off_t offset)
 {
     HALMsg msg = {.cmd=(PARAM_ASK|SENSOR), .rid=sensor_id, .len=0};
     HALErr err = HALConn_request(conn, &msg);
@@ -28,7 +28,7 @@ int sensor_read(HALConnection *conn, unsigned char sensor_id, char *buf, size_t 
 }
 
 /* === Triggers === */
-int trigger_read(HALConnection *conn, unsigned char trigger_id, char *buf, size_t size, off_t offset)
+static int trigger_read(HALConnection *conn, unsigned char trigger_id, char *buf, size_t size, off_t offset)
 {
     HALMsg msg = {.cmd=(PARAM_ASK|TRIGGER), .rid=trigger_id, .len=0};
     HALErr err = HALConn_request(conn, &msg);
@@ -39,7 +39,7 @@ int trigger_read(HALConnection *conn, unsigned char trigger_id, char *buf, size_
 }
 
 /* === Switchs === */
-int switch_read(HALConnection *conn, unsigned char switch_id, char *buf, size_t size, off_t offset)
+static int switch_read(HALConnection *conn, unsigned char switch_id, char *buf, size_t size, off_t offset)
 {
     HALMsg msg = {.cmd=(PARAM_ASK|SWITCH), .rid=switch_id, .len=0};
     HALErr err = HALConn_request(conn, &msg);
@@ -49,7 +49,7 @@ int switch_read(HALConnection *conn, unsigned char switch_id, char *buf, size_t 
     return snprintf(buf, size, "%c\n", msg.data[0] ? '1' : '0');
 }
 
-int switch_write(HALConnection *conn, unsigned char switch_id, const char *buf, size_t size, off_t offset)
+static int switch_write(HALConnection *conn, unsigned char switch_id, const char *buf, size_t size, off_t offset)
 {
     HALMsg msg = {.cmd=(PARAM_CHANGE|SWITCH), .rid=switch_id, .len=1};
     msg.data[0] = (buf[0] == '0') ? 0 : 1;
@@ -62,7 +62,7 @@ int switch_write(HALConnection *conn, unsigned char switch_id, const char *buf, 
 
 
 /* === Animations FPS === */
-int anim_fps_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t size, off_t offset)
+static int anim_fps_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t size, off_t offset)
 {
     HALMsg msg = {.cmd=(PARAM_ASK|ANIMATION_DELAY), .rid=anim_id, .len=0};
     HALErr err = HALConn_request(conn, &msg);
@@ -76,7 +76,7 @@ int anim_fps_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t 
     return snprintf(buf, size, "%d\n", 1000/delay);
 }
 
-int anim_fps_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
+static int anim_fps_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
 {
     char *endptr;
     int fps = strtol(buf, &endptr, 10);
@@ -94,7 +94,7 @@ int anim_fps_write(HALConnection *conn, unsigned char anim_id, const char *buf, 
 }
 
 /* === Animations loop === */
-int anim_loop_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t size, off_t offset)
+static int anim_loop_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t size, off_t offset)
 {
     HALMsg msg = {.cmd=(PARAM_ASK|ANIMATION_LOOP), .rid=anim_id, .len=0};
     HALErr err = HALConn_request(conn, &msg);
@@ -104,7 +104,7 @@ int anim_loop_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t
     return snprintf(buf, size, "%c\n", msg.data[0] ? '1' : '0');
 }
 
-int anim_loop_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
+static int anim_loop_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
 {
     HALMsg msg = {.cmd=(PARAM_CHANGE|ANIMATION_LOOP), .rid=anim_id, .len=1};
     msg.data[0] = (buf[0] == '0') ? 0 : 1;
@@ -116,7 +116,7 @@ int anim_loop_write(HALConnection *conn, unsigned char anim_id, const char *buf,
 }
 
 /* === Animations playing === */
-int anim_play_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t size, off_t offset)
+static int anim_play_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t size, off_t offset)
 {
     HALMsg msg = {.cmd=(PARAM_ASK|ANIMATION_PLAY), .rid=anim_id, .len=0};
     HALErr err = HALConn_request(conn, &msg);
@@ -126,7 +126,7 @@ int anim_play_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t
     return snprintf(buf, size, "%c\n", msg.data[0] ? '1' : '0');
 }
 
-int anim_play_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
+static int anim_play_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
 {
     HALMsg msg = {.cmd=(PARAM_CHANGE|ANIMATION_PLAY), .rid=anim_id, .len=1};
     msg.data[0] = (buf[0] == '0') ? 0 : 1;
@@ -138,7 +138,7 @@ int anim_play_write(HALConnection *conn, unsigned char anim_id, const char *buf,
 }
 
 /* === Animations frames === */
-int anim_frames_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t size, off_t offset)
+static int anim_frames_read(HALConnection *conn, unsigned char anim_id, char *buf, size_t size, off_t offset)
 {
     HALMsg msg = {.cmd=(PARAM_ASK|ANIMATION_FRAMES), .rid=anim_id, .len=0};
     HALErr err = HALConn_request(conn, &msg);
@@ -150,7 +150,7 @@ int anim_frames_read(HALConnection *conn, unsigned char anim_id, char *buf, size
     return len;
 }
 
-int anim_frames_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
+static int anim_frames_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
 {
     if (size == 0 || size > 255){
         return -EINVAL;
@@ -166,24 +166,24 @@ int anim_frames_write(HALConnection *conn, unsigned char anim_id, const char *bu
 }
 
 /* === driver === */
-int driver_rx_bytes_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
+static int driver_rx_bytes_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
 {
     unsigned long int rx = HALConn_rx_bytes(conn);
     return snprintf(buf, size, "%lu\n",  rx);
 }
 
-int driver_tx_bytes_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
+static int driver_tx_bytes_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
 {
     unsigned long int tx = HALConn_tx_bytes(conn);
     return snprintf(buf, size, "%lu\n",  tx);
 }
 
-int driver_loglevel_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
+static int driver_loglevel_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
 {
     return snprintf(buf, size, "%d\n",  current_log_level);
 }
 
-int driver_loglevel_write(HALConnection *conn, unsigned char unused_id, const char *buf, size_t size, off_t offset)
+static int driver_loglevel_write(HALConnection *conn, unsigned char unused_id, const char *buf, size_t size, off_t offset)
 {
     char *endptr;
     int val = strtol(buf, &endptr, 10);
@@ -194,7 +194,7 @@ int driver_loglevel_write(HALConnection *conn, unsigned char unused_id, const ch
     return size;
 }
 
-int driver_version_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
+static int driver_version_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
 {
 #ifndef HAL_DRIVER_VERSION
     return snprintf(buf, size, "YOLO\n");
@@ -203,7 +203,7 @@ int driver_version_read(HALConnection *conn, unsigned char unused_id, char *buf,
 #endif
 }
 
-int driver_uptime_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
+static int driver_uptime_read(HALConnection *conn, unsigned char unused_id, char *buf, size_t size, off_t offset)
 {
     unsigned long int rx = HALConn_uptime(conn);
     return snprintf(buf, size, "%lu\n",  rx);
