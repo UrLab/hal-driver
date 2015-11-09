@@ -55,6 +55,10 @@ HALErr HALConn_request(HALConnection *conn, HALMsg *msg);
  */
 int HALConn_run_reader(HALConnection *conn, const char **trigger_names, size_t n_triggers);
 
+void HALConn_stop_reader(HALConnection *conn);
+
+int HALConn_is_running(HALConnection *conn);
+
 int HALConn_uptime(HALConnection *conn);
 
 size_t HALConn_rx_bytes(HALConnection *conn);

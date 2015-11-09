@@ -17,9 +17,15 @@ void *HALFS_init(struct fuse_conn_info *conn)
     hal = HAL_connect();
     if (! hal){
         HAL_WARN("Cannot connect to arduino; quit !");
-        exit(1);
     }
     return NULL;
+}
+
+void HALFS_cleanup(void *param)
+{
+    if (hal){
+        HAL_release(hal);
+    }
 }
 
 static int HALFS_open(const char *path, struct fuse_file_info *fi)
@@ -157,6 +163,7 @@ static struct fuse_operations hal_ops = {
     .write      = HALFS_write,
     .truncate   = HALFS_trunc,
     .init       = HALFS_init,
+    .destroy    = HALFS_cleanup,
     .readlink   = HALFS_readlink
 };
 

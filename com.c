@@ -33,12 +33,14 @@ struct HALConnection {
     /* Multithreading for the reader */
     pthread_mutex_t mutex;
     pthread_t reader_thread;
+    int running;
 
     /* A table containing pending requests, indexed by seq number */
     pthread_cond_t  waits[HALMSG_SEQ_MAX+1];
     unsigned char    used[HALMSG_SEQ_MAX+1];
     HALMsg      responses[HALMSG_SEQ_MAX+1];
 
+    /* Event socket */
     int sock;
     int sock_clients[HALCONN_SOCK_CLIENTS];
     size_t n_sock_clients;
@@ -126,6 +128,18 @@ HALConnection *HALConn_open(const char *path, const char *sock_path)
 
 void HALConn_close(HALConnection *conn)
 {
+    if (HALConn_is_running(conn)){
+        HALConn_stop_reader(conn);
+    }
+    for (size_t i=0; i<conn->n_sock_clients; i++){
+        close(conn->sock_clients[i]);
+    }
+    unlink(conn->sock_path);
+    free(conn->sock_path);
+    pthread_mutex_destroy(&conn->mutex);
+    for (size_t i=0; i<HALMSG_SEQ_MAX; i++){
+        pthread_cond_destroy(conn->waits+i);
+    }
     close(conn->fd);
     free(conn);
 }
@@ -388,7 +402,7 @@ static void *HALConn_reader_thread(void *arg)
 
     HAL_INFO("Reader thread started");
 
-    while (1){
+    while (HALConn_is_running(conn)){
         /* Wait for arduino readyness */
         do {r = poll(polled, 2, 1000);}
         while (r == 0);
@@ -423,6 +437,8 @@ static void *HALConn_reader_thread(void *arg)
         }
     }
 
+    HAL_INFO("Reader thread terminated");
+
     return NULL;
 }
 
@@ -432,7 +448,27 @@ int HALConn_run_reader(HALConnection *conn, const char **trigger_names, size_t n
     opts->conn = conn;
     opts->trigger_names = trigger_names;
     opts->n_triggers = n_triggers;
+    conn->running = 1;
     return pthread_create(&conn->reader_thread, NULL, HALConn_reader_thread, opts);
+}
+
+void HALConn_stop_reader(HALConnection *conn)
+{
+    pthread_mutex_lock(&conn->mutex);
+    conn->running = 0;
+    pthread_mutex_unlock(&conn->mutex);
+
+    void *retval;
+    pthread_join(conn->reader_thread, &retval);
+}
+
+int HALConn_is_running(HALConnection *conn)
+{
+    int r = 0;
+    pthread_mutex_lock(&conn->mutex);
+    r = conn->running;
+    pthread_mutex_unlock(&conn->mutex);
+    return r;
 }
 
 size_t HALConn_rx_bytes(HALConnection *conn)

@@ -13,4 +13,6 @@ typedef struct HAL {
 
 HAL *HAL_connect();
 
+void HAL_release(HAL *hal);
+
 #endif

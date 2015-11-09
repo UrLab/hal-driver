@@ -427,6 +427,7 @@ HAL *HAL_connect()
                 HAL_INFO("Connected to %s !", globbuf.gl_pathv[i]);
                 HALConn_run_reader(conn, res->trigger_names, res->n_triggers);
             } else {
+                HALFS_destroy(res->root);
                 free(res);
                 HALConn_close(conn);
                 res = NULL;
@@ -435,4 +436,15 @@ HAL *HAL_connect()
     }
     globfree(&globbuf);
     return res;
+}
+
+void HAL_release(HAL *hal)
+{
+    HALFS_destroy(hal->root);
+    for (size_t i=0; i<hal->n_triggers; i++){
+        free((void*) hal->trigger_names[i]);
+    }
+    free(hal->trigger_names);
+    HALConn_close(hal->conn);
+    free(hal);
 }

@@ -25,7 +25,7 @@ const char *HALErr_desc(HALErr err);
 
 void dump_message(const HALMsg *msg, const char *prefix);
 
-#define HAL_ERROR(err,fmt,...) print_log(ERROR, "{%d: %s}"fmt, err, HALErr_desc(err), ##__VA_ARGS__)
+#define HAL_ERROR(err,fmt,...) print_log(ERROR, "{ERROR %d: %s} "fmt, err, HALErr_desc(err), ##__VA_ARGS__)
 #define HAL_WARN(fmt,...) print_log(WARNING, fmt, ##__VA_ARGS__)
 #define HAL_INFO(fmt,...) print_log(INFO, fmt, ##__VA_ARGS__)
 #define HAL_DEBUG(fmt,...) print_log(DEBUG, fmt, ##__VA_ARGS__)
