@@ -27,6 +27,7 @@ static int sensor_read(HALConnection *conn, unsigned char sensor_id, char *buf, 
     return snprintf(buf, size, "%f\n", sensor_val);
 }
 
+
 /* === Triggers === */
 static int trigger_read(HALConnection *conn, unsigned char trigger_id, char *buf, size_t size, off_t offset)
 {
@@ -37,6 +38,7 @@ static int trigger_read(HALConnection *conn, unsigned char trigger_id, char *buf
     }
     return snprintf(buf, size, "%c\n", msg.data[0] ? '1' : '0');
 }
+
 
 /* === Switchs === */
 static int switch_read(HALConnection *conn, unsigned char switch_id, char *buf, size_t size, off_t offset)
@@ -53,6 +55,47 @@ static int switch_write(HALConnection *conn, unsigned char switch_id, const char
 {
     HALMsg msg = {.cmd=(PARAM_CHANGE|SWITCH), .rid=switch_id, .len=1};
     msg.data[0] = (buf[0] == '0') ? 0 : 1;
+    HALErr err = HALConn_request(conn, &msg);
+    if (err != OK){
+        return -EAGAIN;
+    }
+    return size;
+}
+
+
+/* === Rgbs === */
+static int rgb_read(HALConnection *conn, unsigned char rgb_id, char *buf, size_t size, off_t offset)
+{
+    HALMsg msg = {.cmd=(PARAM_ASK|RGB), .rid=rgb_id, .len=0};
+    HALErr err = HALConn_request(conn, &msg);
+    if (err != OK){
+        return -EAGAIN;
+    }
+    return snprintf(buf, size, "#%02hhx%02hhx%02hhx\n", 
+                               msg.data[0], msg.data[1], msg.data[2]);
+}
+
+static int rgb_write(HALConnection *conn, unsigned char rgb_id, const char *buf, size_t size, off_t offset)
+{
+    unsigned char r, g, b;
+
+    /* Attempt to match #rrggbb */
+    if (sscanf(buf, "#%02hhx%02hhx%02hhx", &r, &g, &b) != 3){
+        /* Otherwise attempt to match #rgb */
+        if (sscanf(buf, "#%01hhx%01hhx%01hhx", &r, &g, &b) != 3){
+            return -EINVAL;
+        } else {
+            r <<= 4;
+            g <<= 4;
+            b <<= 4;
+        }
+    }
+
+    HALMsg msg = {.cmd=(PARAM_CHANGE|RGB), .rid=rgb_id, .len=3};
+    msg.data[0] = r;
+    msg.data[1] = g;
+    msg.data[2] = b;
+
     HALErr err = HALConn_request(conn, &msg);
     if (err != OK){
         return -EAGAIN;
@@ -270,7 +313,7 @@ static HALErr HAL_load(HAL *hal)
     HALFS *node = NULL;
 
     /* Get Tree messages from Arduino */
-    for (int i=0; i<4 && err == OK; i++){
+    for (int i=0; i<5 && err == OK; i++){
         do {
             err = HALConn_read_message(hal->conn, &msg);
             if (err != OK){
@@ -318,6 +361,26 @@ static HALErr HAL_load(HAL *hal)
                     node->ops.size = 2;
                     node->id = i;
                     HAL_DEBUG("  Inserted switch %s", node->name);
+                }
+                break;
+            case RGB:
+                HAL_DEBUG("Loading %hhu rgbs", n);
+                file = path + sprintf(path, "/rgbs/");
+                for (unsigned char i=0; i<n; i++){
+                    err = HALConn_read_message(hal->conn, &msg);
+                    if (err != OK){
+                        HAL_ERROR(err, "Unable to get rgb %hhu", i);
+                        return err;
+                    }
+                    msg.data[msg.len] = '\0';
+                    strcpy(file, (const char *) msg.data);
+                    node = HALFS_insert(hal->root, path);
+                    node->ops.mode = 0666;
+                    node->ops.write = rgb_write;
+                    node->ops.read = rgb_read;
+                    node->ops.size = 8;
+                    node->id = i;
+                    HAL_DEBUG("  Inserted rgb %s", node->name);
                 }
                 break;
             case ANIMATION_FRAMES:

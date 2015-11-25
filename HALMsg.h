@@ -16,6 +16,7 @@ typedef enum {
     ANIMATION_DELAY='D',
     ANIMATION_LOOP='L',
     ANIMATION_PLAY='P',
+    RGB='R',
 
     PARAM_CHANGE=0x80,
     PARAM_ASK=0x00
