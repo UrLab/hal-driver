@@ -12,6 +12,7 @@ typedef enum {
     TRIGGER='T',
     SWITCH='S',
     SENSOR='C',
+    DHTSENSOR='H',
     ANIMATION_FRAMES='F',
     ANIMATION_DELAY='D',
     ANIMATION_LOOP='L',

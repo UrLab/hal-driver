@@ -27,6 +27,17 @@ static int sensor_read(HALConnection *conn, unsigned char sensor_id, char *buf, 
     return snprintf(buf, size, "%f\n", sensor_val);
 }
 
+/* === DHTSensors === */
+static int DHTsensor_read(HALConnection *conn, unsigned char sensor_id, char *buf, size_t size, off_t offset)
+{
+    HALMsg msg = {.cmd=(PARAM_ASK|DHTSENSOR), .rid=sensor_id, .len=0};
+    HALErr err = HALConn_request(conn, &msg);
+    if (err != OK){
+        return -EAGAIN;
+    }
+    unsigned int DHTsensor_val = ((msg.data[0]<<8) | msg.data[1]);
+    return snprintf(buf, size, "%u\n", DHTsensor_val);
+}
 
 /* === Triggers === */
 static int trigger_read(HALConnection *conn, unsigned char trigger_id, char *buf, size_t size, off_t offset)
@@ -341,6 +352,25 @@ static HALErr HAL_load(HAL *hal)
                     node->ops.size = 13;
                     node->id = i;
                     HAL_DEBUG("  Inserted sensor %s", node->name);
+                }
+                break;
+            case DHTSENSOR:
+                HAL_DEBUG("Loading %hhu DHTsensors", n);
+                file = path + sprintf(path, "/DHTsensors/");
+                for (unsigned char i=0; i<n; i++){
+                    err = HALConn_read_message(hal->conn, &msg);
+                    if (err != OK){
+                        HAL_ERROR(err, "Unable to get DHTsensor %hhu", i);
+                        return err;
+                    }
+                    msg.data[msg.len] = '\0';
+                    strcpy(file, (const char *) msg.data);
+                    node = HALFS_insert(hal->root, path);
+                    node->ops.mode = 0444;
+                    node->ops.read = DHTsensor_read;
+                    node->ops.size = 13;
+                    node->id = i;
+                    HAL_DEBUG("  Inserted DHTsensor %s", node->name);
                 }
                 break;
             case SWITCH:
