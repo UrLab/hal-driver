@@ -73,33 +73,6 @@ static int switch_write(HALConnection *conn, unsigned char switch_id, const char
     return size;
 }
 
-// ============= servos ==========
-static int servo_read(HALConnection *conn, unsigned char switch_id, char *buf, size_t size, off_t offset)
-{
-    HALMsg msg = {.cmd=(PARAM_ASK|SERVO), .rid=switch_id, .len=0};
-    HALErr err = HALConn_request(conn, &msg);
-    if (err != OK){
-        return -EAGAIN;
-    }
-    return snprintf(buf, size, "%i\n", msg.data[0]);
-}
-
-static int servo_write(HALConnection *conn, unsigned char switch_id, const char *buf, size_t size, off_t offset)
-{
-    HALMsg msg = {.cmd=(PARAM_CHANGE|SERVO), .rid=switch_id, .len=1};
-    char *endptr;
-    unsigned char val = strtol(buf, &endptr, 10);
-    if (endptr == buf || val > 180){
-        return -EINVAL;
-    }
-    msg.data[0] = val;
-    HALErr err = HALConn_request(conn, &msg);
-    if (err != OK){
-        return -EAGAIN;
-    }
-    return size;
-}
-
 
 /* === Rgbs === */
 static int rgb_read(HALConnection *conn, unsigned char rgb_id, char *buf, size_t size, off_t offset)
@@ -351,7 +324,7 @@ static HALErr HAL_load(HAL *hal)
     HALFS *node = NULL;
 
     /* Get Tree messages from Arduino */
-    for (int i=0; i<7 && err == OK; i++){
+    for (int i=0; i<5 && err == OK; i++){
         do {
             err = HALConn_read_message(hal->conn, &msg);
             if (err != OK){
@@ -361,7 +334,6 @@ static HALErr HAL_load(HAL *hal)
         } while (MSG_TYPE(&msg) != TREE);
 
         n = msg.rid;
-        printf("%c",msg.data[0]);
         switch (msg.data[0]){
             case SENSOR:
                 HAL_DEBUG("Loading %hhu sensors", n);
@@ -399,26 +371,6 @@ static HALErr HAL_load(HAL *hal)
                     node->ops.size = 13;
                     node->id = i;
                     HAL_DEBUG("  Inserted DHTsensor %s", node->name);
-                }
-                break;
-            case SERVO:
-                HAL_DEBUG("Loading %hhu servo", n);
-                file = path + sprintf(path, "/servo/");
-                for (unsigned char i=0; i<n; i++){
-                    err = HALConn_read_message(hal->conn, &msg);
-                    if (err != OK){
-                        HAL_ERROR(err, "Unable to get servo %hhu", i);
-                        return err;
-                    }
-                    msg.data[msg.len] = '\0';
-                    strcpy(file, (const char *) msg.data);
-                    node = HALFS_insert(hal->root, path);
-                    node->ops.mode = 0666;
-                    node->ops.write = servo_write;
-                    node->ops.read = servo_read;
-                    node->ops.size = 13;
-                    node->id = i;
-                    HAL_DEBUG("  Inserted servo %s", node->name);
                 }
                 break;
             case SWITCH:
