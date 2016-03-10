@@ -206,7 +206,7 @@ static int anim_frames_read(HALConnection *conn, unsigned char anim_id, char *bu
 
 static int anim_frames_write(HALConnection *conn, unsigned char anim_id, const char *buf, size_t size, off_t offset)
 {
-    if (size == 0 || size > 255){
+    if (size == 0 || size > 127){
         return -EINVAL;
     }
     HALMsg msg = {.cmd=(PARAM_CHANGE|ANIMATION_FRAMES), .rid=anim_id, .len=size};
@@ -298,7 +298,7 @@ static void HAL_insert_animation(HALFS *root, const char *name, unsigned char id
     sprintf(path, "/animations/%s/frames", name);
     node = HALFS_insert(root, path);
     node->ops.mode = 0666;
-    node->ops.size = 255;
+    node->ops.size = 127;
     node->ops.read = anim_frames_read;
     node->ops.write = anim_frames_write;
     node->id = id;
